@@ -29,7 +29,7 @@ Main entry points:
 - `aw9523b_id_get()` reads the device identification register.
 - `aw9523b_port0_drive_mode_get()` and `aw9523b_port0_drive_mode_set()` read and write the port-0 output drive mode through `AW9523B_REG_GCR` bit 4.
 - `aw9523b_port_dir_bits_get()`, `aw9523b_port_dir_bits_set()`, and `aw9523b_port_dir_bits_update()` read or write an entire 8-bit port direction mask, where `1` means input and `0` means output.
-- `aw9523b_port_dir_set()` changes the direction of a single pin without forcing the rest of the port.
+- `aw9523b_port_dir_set()` changes the direction of a single pin with an explicit direction enum instead of a boolean flag.
 - `aw9523b_port_interrupt_bits_get()`, `aw9523b_port_interrupt_bits_set()`, and `aw9523b_port_interrupt_bits_update()` read or write an entire 8-bit interrupt-enable mask using positive enable semantics.
 - `aw9523b_interrupt_get()` and `aw9523b_interrupt_set()` read or write interrupt enable state for one pin.
 - `aw9523b_level_get()` reads the current logic level of one pin from the input register.
@@ -87,7 +87,7 @@ int example_aw9523b_set_output(uint16_t aw9523b_address) {
     err = aw9523b_port0_drive_mode_set(aw9523b, AW9523B_PORT0_DRIVE_MODE_PUSH_PULL);
   }
   if (err == II2C_ERR_NONE) {
-    err = aw9523b_port_dir_set(aw9523b, 0, 3, false);
+    err = aw9523b_port_dir_set(aw9523b, 0, 3, AW9523B_PORT_DIRECTION_OUTPUT);
   }
   if (err == II2C_ERR_NONE) {
     err = aw9523b_level_set(aw9523b, 0, 3, 1);
@@ -103,7 +103,7 @@ Example interrupt configuration:
 
 ```c
 int example_aw9523b_enable_interrupt(ii2c_device_handle_t aw9523b) {
-  int32_t err = aw9523b_port_dir_set(aw9523b, 1, 2, true);
+  int32_t err = aw9523b_port_dir_set(aw9523b, 1, 2, AW9523B_PORT_DIRECTION_INPUT);
   if (err != II2C_ERR_NONE) {
     return err;
   }
@@ -126,7 +126,8 @@ int example_aw9523b_enable_interrupt(ii2c_device_handle_t aw9523b) {
 ## Notes
 
 - Valid `port` values are `0` and `1`. Valid `pin` values are `0` through `7`.
-- `aw9523b_port_dir_bits_*()` and `aw9523b_port_dir_set()` use the AW9523B configuration-register convention where `1` means input and `0` means output.
+- `aw9523b_port_dir_bits_*()` use the AW9523B configuration-register convention where `1` means input and `0` means output.
+- `aw9523b_port_dir_set()` exposes that same convention through `AW9523B_PORT_DIRECTION_INPUT` and `AW9523B_PORT_DIRECTION_OUTPUT`, so call sites do not need boolean literals.
 - `aw9523b_port_interrupt_bits_*()` and `aw9523b_interrupt_*()` expose positive enable semantics even though the raw interrupt-enable register stores the inverse bit value.
 - `aw9523b_port0_drive_mode_*()` affects only port 0. The current public component does not expose a configurable drive-mode API for port 1.
 - `aw9523b_level_set()` writes the output latch register, while `aw9523b_level_get()` reads the input-state register.

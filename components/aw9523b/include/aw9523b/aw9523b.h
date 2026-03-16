@@ -37,6 +37,14 @@ typedef enum aw9523b_port0_drive_mode {
   AW9523B_PORT0_DRIVE_MODE_PUSH_PULL = 1,
 } aw9523b_port0_drive_mode_t;
 
+/** @brief Single-pin direction choices used by `aw9523b_port_dir_set()`. */
+typedef enum aw9523b_port_direction {
+  /** @brief Configure the selected pin as an output. */
+  AW9523B_PORT_DIRECTION_OUTPUT = 0,
+  /** @brief Configure the selected pin as an input. */
+  AW9523B_PORT_DIRECTION_INPUT = 1,
+} aw9523b_port_direction_t;
+
 /** @name Raw Register Access */
 /** @{ */
 
@@ -195,11 +203,16 @@ int32_t aw9523b_port_dir_bits_update(ii2c_device_handle_t dev,
  * @param dev Attached `ii2c` device handle for the AW9523B.
  * @param port Port index to update: `0` or `1`.
  * @param pin Pin index inside the port: `0` through `7`.
- * @param is_input Set `true` for input mode or `false` for output mode.
+ * @param direction Requested pin direction. Use
+ * `AW9523B_PORT_DIRECTION_OUTPUT` or `AW9523B_PORT_DIRECTION_INPUT`.
  * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `port` or
- * `pin` is out of range, or an `II2C_ERR_*` code from `ii2c`.
+ * `pin` is out of range, when `direction` is not one of the exported enum
+ * values, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t aw9523b_port_dir_set(ii2c_device_handle_t dev, uint8_t port, uint8_t pin, bool is_input);
+int32_t aw9523b_port_dir_set(ii2c_device_handle_t dev,
+                             uint8_t port,
+                             uint8_t pin,
+                             aw9523b_port_direction_t direction);
 
 /** @} */
 

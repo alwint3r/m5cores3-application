@@ -149,7 +149,10 @@ int32_t aw9523b_port_dir_bits_update(ii2c_device_handle_t dev,
   return aw9523b_reg8_update_bits(dev, reg, mask, bits);
 }
 
-int32_t aw9523b_port_dir_set(ii2c_device_handle_t dev, uint8_t port, uint8_t pin, bool is_input) {
+int32_t aw9523b_port_dir_set(ii2c_device_handle_t dev,
+                             uint8_t port,
+                             uint8_t pin,
+                             aw9523b_port_direction_t direction) {
   uint8_t reg = 0;
   uint8_t mask = 0;
   int32_t err = aw9523b_port_pin_to_reg_and_mask(AW9523B_REG_CONFIG0, port, pin, &reg, &mask);
@@ -157,7 +160,18 @@ int32_t aw9523b_port_dir_set(ii2c_device_handle_t dev, uint8_t port, uint8_t pin
     return err;
   }
 
-  uint8_t new_value = is_input ? mask : 0;
+  uint8_t new_value = 0;
+
+  switch (direction) {
+    case AW9523B_PORT_DIRECTION_OUTPUT:
+      new_value = 0;
+      break;
+    case AW9523B_PORT_DIRECTION_INPUT:
+      new_value = mask;
+      break;
+    default:
+      return II2C_ERR_INVALID_ARG;
+  }
 
   return aw9523b_reg8_update_bits(dev, reg, mask, new_value);
 }
