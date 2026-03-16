@@ -2,15 +2,25 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include <driver/gpio.h>
-
 #include <aw9523b/aw9523b.h>
 #include <axp2101/axp2101.h>
 #include <axp2101/axp2101_register.h>
+#include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
+#include <ispi/ispi.h>
 
-static const gpio_num_t SYS_I2C_SDA = GPIO_NUM_12;
-static const gpio_num_t SYS_I2C_SCL = GPIO_NUM_11;
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+static const int32_t SYS_I2C_SDA = 12;
+static const int32_t SYS_I2C_SCL = 11;
+static const int32_t LCD_SPI_MOSI = 37;
+static const int32_t LCD_SPI_SCK = 36;
+static const int32_t LCD_SPI_CS = 3;
+static const int32_t LCD_SPI_DC = 35;
+
+static const uint16_t LCD_WIDTH = 320;
+static const uint16_t LCD_HEIGHT = 240;
 
 static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
@@ -23,6 +33,9 @@ static const uint8_t CORES3_AW9523B_LCD_RST_PIN = 1;
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b = NULL;
 static ii2c_device_handle_t axp2101 = NULL;
+static ispi_master_bus_handle_t lcd_spi = NULL;
+static ispi_device_handle_t lcd = NULL;
+static bool lcd_dc_gpio_configured = false;
 
 static const char *bool_to_yes_no(bool value) {
   return value ? "yes" : "no";
@@ -50,6 +63,11 @@ static const char *axp2101_charging_status_to_string(axp2101_charging_status_t s
 }
 
 static void release_handles(void) {
+  if (lcd_dc_gpio_configured) {
+    (void)igpio_reset_pin(LCD_SPI_DC);
+    lcd_dc_gpio_configured = false;
+  }
+
   if (aw9523b != NULL) {
     (void)ii2c_del_device(aw9523b);
     aw9523b = NULL;
@@ -64,6 +82,149 @@ static void release_handles(void) {
     (void)ii2c_del_master_bus(sys_i2c);
     sys_i2c = NULL;
   }
+}
+
+static int32_t configure_lcd_dc_gpio(void) {
+  igpio_config_t config;
+  igpio_get_default_config(&config);
+
+  config.io_num = LCD_SPI_DC;
+  config.mode = IGPIO_MODE_OUTPUT;
+  config.pull_mode = IGPIO_PULL_FLOATING;
+  config.intr_type = IGPIO_INTR_DISABLED;
+
+  int32_t err = igpio_configure(&config);
+  if (err != IGPIO_ERR_NONE) {
+    return err;
+  }
+
+  lcd_dc_gpio_configured = true;
+
+  err = igpio_set_level(LCD_SPI_DC, false);
+  if (err != IGPIO_ERR_NONE) {
+    return err;
+  }
+
+  bool level = true;
+  err = igpio_get_level(LCD_SPI_DC, &level);
+  if (err != IGPIO_ERR_NONE) {
+    return err;
+  }
+
+  if (level) {
+    return IGPIO_ERR_INVALID_STATE;
+  }
+
+  puts("LCD DC GPIO configured on GPIO35 and verified low");
+  return IGPIO_ERR_NONE;
+}
+
+static void delay_ms(uint32_t ms) {
+  vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+static int32_t lcd_write_bytes(bool is_data, const uint8_t *bytes, size_t len) {
+  if (bytes == NULL || len == 0) {
+    return ISPI_ERR_INVALID_ARG;
+  }
+
+  int32_t err = igpio_set_level(LCD_SPI_DC, is_data);
+  if (err != IGPIO_ERR_NONE) {
+    return err;
+  }
+
+  ispi_transaction_t trans;
+  ispi_get_default_transaction(&trans);
+  trans.tx_buffer = bytes;
+  trans.tx_size = len;
+
+  return ispi_device_transfer(lcd, &trans);
+}
+
+static int32_t lcd_write_command(uint8_t cmd) {
+  return lcd_write_bytes(false, &cmd, 1);
+}
+
+static int32_t lcd_write_data(const uint8_t *bytes, size_t len) {
+  return lcd_write_bytes(true, bytes, len);
+}
+
+static int32_t lcd_hard_reset(void) {
+  int32_t err =
+      aw9523b_level_set(aw9523b, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 0);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  delay_ms(20);
+
+  err = aw9523b_level_set(aw9523b, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  delay_ms(120);
+  puts("LCD hard reset complete");
+  return II2C_ERR_NONE;
+}
+
+static int32_t lcd_set_address_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+  uint8_t column_data[4] = {
+      (uint8_t)(x0 >> 8),
+      (uint8_t)(x0 & 0xFF),
+      (uint8_t)(x1 >> 8),
+      (uint8_t)(x1 & 0xFF),
+  };
+
+  uint8_t row_data[4] = {
+      (uint8_t)(y0 >> 8),
+      (uint8_t)(y0 & 0xFF),
+      (uint8_t)(y1 >> 8),
+      (uint8_t)(y1 & 0xFF),
+  };
+
+  int32_t err = lcd_write_command(0x2A);
+  if (err != ISPI_ERR_NONE) {
+    return err;
+  }
+
+  err = lcd_write_data(column_data, sizeof(column_data));
+  if (err != ISPI_ERR_NONE) {
+    return err;
+  }
+
+  err = lcd_write_command(0x2B);
+  if (err != ISPI_ERR_NONE) {
+    return err;
+  }
+
+  err = lcd_write_data(row_data, sizeof(row_data));
+  if (err != ISPI_ERR_NONE) {
+    return err;
+  }
+
+  return lcd_write_command(0x2C);
+}
+
+static int32_t lcd_fill_screen_rgb565(uint16_t color) {
+  uint8_t chunk[64 * 2];
+  for (size_t i = 0; i < 64; ++i) {
+    chunk[(i * 2) + 0] = (uint8_t)(color >> 8);
+    chunk[(i * 2) + 1] = (uint8_t)(color & 0xFF);
+  }
+
+  size_t pixels_remaining = (size_t)LCD_WIDTH * (size_t)LCD_HEIGHT;
+  while (pixels_remaining > 0) {
+    size_t pixels_this_round = pixels_remaining > 64 ? 64 : pixels_remaining;
+    int32_t err = lcd_write_data(chunk, pixels_this_round * 2);
+    if (err != ISPI_ERR_NONE) {
+      return err;
+    }
+    pixels_remaining -= pixels_this_round;
+  }
+
+  puts("LCD display memory fill complete");
+  return ISPI_ERR_NONE;
 }
 
 static int32_t create_i2c_bus(void) {
@@ -478,4 +639,320 @@ void app_main(void) {
     release_handles();
     return;
   }
+
+  err = configure_lcd_dc_gpio();
+  if (err != IGPIO_ERR_NONE) {
+    printf("Failed to configure LCD DC GPIO: %s\n", igpio_err_to_name(err));
+    release_handles();
+    return;
+  }
+
+  ispi_master_bus_config_t spi_bus_cfg = {0};
+  ispi_get_default_master_bus_config(&spi_bus_cfg);
+  spi_bus_cfg.host = ISPI_HOST_SPI2;
+  spi_bus_cfg.mosi_io_num = LCD_SPI_MOSI;
+  spi_bus_cfg.miso_io_num = -1;
+  spi_bus_cfg.sclk_io_num = LCD_SPI_SCK;
+
+  err = ispi_new_master_bus(&spi_bus_cfg, &lcd_spi);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to create new SPI master bus: %s\n", ispi_err_to_name(err));
+    release_handles();
+    return;
+  }
+
+  ispi_device_config_t lcd_dev_cfg = {0};
+  ispi_get_default_device_config(&lcd_dev_cfg);
+  lcd_dev_cfg.cs_io_num = LCD_SPI_CS;
+  lcd_dev_cfg.clock_speed_hz = 1000000;
+  lcd_dev_cfg.mode = 0;
+
+  err = ispi_new_device(lcd_spi, &lcd_dev_cfg, &lcd);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to create SPI device: %s\n", ispi_err_to_name(err));
+    release_handles();
+    return;
+  }
+
+  err = lcd_hard_reset();
+  if (err != II2C_ERR_NONE) {
+    printf("Failed to hard-reset LCD: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  err = lcd_write_command(0x01);  // SWRESET
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD SWRESET: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  delay_ms(120);
+
+  err = lcd_write_command(0xC8);  // SETEXTC
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD SETEXTC: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  {
+    const uint8_t data[] = {0xFF, 0x93, 0x42};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD SETEXTC data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xC0);  // PWCTR1
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD PWCTR1: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  {
+    const uint8_t data[] = {0x12, 0x12};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD PWCTR1 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xC1);  // PWCTR2
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD PWCTR2: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0x03};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD PWCTR2 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xC5);  // VMCTR1
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD VMCTR1: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0xF2};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD VMCTR1 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xB0);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD B0: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0xE0};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD B0 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xF6);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD F6: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0x01, 0x00, 0x00};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD F6 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xE0);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD E0: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {
+        0x00,
+        0x0C,
+        0x11,
+        0x04,
+        0x11,
+        0x08,
+        0x37,
+        0x89,
+        0x4C,
+        0x06,
+        0x0C,
+        0x0A,
+        0x2E,
+        0x34,
+        0x0F,
+    };
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD E0 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xE1);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD E1: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {
+        0x00,
+        0x0B,
+        0x11,
+        0x05,
+        0x13,
+        0x09,
+        0x33,
+        0x67,
+        0x48,
+        0x07,
+        0x0E,
+        0x0B,
+        0x2E,
+        0x33,
+        0x0F,
+    };
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD E1 data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0xB6);  // DFUNCTR
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD DFUNCTR: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0x08, 0x82, 0x1D, 0x04};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD DFUNCTR data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0x11);  // SLPOUT
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD SLPOUT: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  delay_ms(120);
+
+  err = lcd_write_command(0x21);  // INVON
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD INVON: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  err = lcd_write_command(0x3A);  // COLMOD
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD COLMOD: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0x55};  // 16-bit RGB565
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write LCD COLMOD data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0x36);  // MADCTL
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD MADCTL: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+  {
+    const uint8_t data[] = {0x08};
+    err = lcd_write_data(data, sizeof(data));
+    if (err != ISPI_ERR_NONE) {
+      printf("Failed to write MADCTL data: %ld\n", (long)err);
+      release_handles();
+      return;
+    }
+  }
+
+  err = lcd_write_command(0x38);  // IDMOFF
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD IDMOFF: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  puts("LCD panel init commands complete");
+
+  err = lcd_write_command(0x29);  // DISPON
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to send LCD DISPON: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  delay_ms(20);
+
+  err = lcd_set_address_window(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to set LCD address window: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  // err = lcd_fill_screen_rgb565(0xF800);
+  // if (err != ISPI_ERR_NONE) {
+  //   printf("Failed to fill LCD memory: %ld\n", (long)err);
+  //   release_handles();
+  //   return;
+  // }
+
+  uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
+  for (size_t i = 0; i < 4; i++) {
+    lcd_fill_screen_rgb565(colors[i]);
+    delay_ms(1000);
+  }
+
+  puts("LCD smoke test complete");
 }
