@@ -1,0 +1,8 @@
+CompileFlags:
+  CompilationDatabase: build
+  Remove: [-m*, -f*]
+
+Diagnostics:
+  Suppress:
+    - unused-includes
+
