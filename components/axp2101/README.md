@@ -1,6 +1,6 @@
 # axp2101
 
-`axp2101` is a small helper component for the AXP2101 PMIC used in this repository. It builds on top of `ii2c` and currently exposes decoded PMU status helpers, fuel-gauge support for battery percentage, PMU common-configuration access for `AXP2101_REG_PMU_COMMON_CFG`, charger LED control for `AXP2101_REG_CHGLED_CTRL`, ADC channel control, LDO enable control for `AXP2101_REG_LDO_CTRL0`, dedicated voltage configuration helpers for ALDO1 through ALDO4 plus BLDO1, BLDO2, and DLDO1, direct voltage-read helpers for VBUS/VSYS/VBAT, and low-level register access helpers for cases that do not yet have a dedicated wrapper.
+`axp2101` is a small helper component for the AXP2101 PMIC used in this repository. It builds on top of `ii2c` and currently exposes decoded PMU status helpers, fuel-gauge support for battery percentage, PMU common-configuration access for `AXP2101_REG_PMU_COMMON_CFG`, charger LED control for `AXP2101_REG_CHGLED_CTRL`, ADC channel control, DCDC enable control for `AXP2101_REG_DCDC_CTRL0`, a dedicated DCDC1 voltage helper, LDO enable control for `AXP2101_REG_LDO_CTRL0`, dedicated voltage configuration helpers for ALDO1 through ALDO4 plus BLDO1, BLDO2, and DLDO1, direct voltage-read helpers for VBUS/VSYS/VBAT, and low-level register access helpers for cases that do not yet have a dedicated wrapper.
 
 ## Public Files
 
@@ -42,6 +42,11 @@ Main entry points:
 - `axp2101_adc_vbus_read()` reads the decoded VBUS ADC result from `AXP2101_REG_VBUS_H` and returns it in millivolts.
 - `axp2101_adc_vsys_read()` reads the decoded VSYS ADC result from `AXP2101_REG_VSYS_H` and returns it in millivolts.
 - `axp2101_adc_vbat_read()` reads the decoded VBAT ADC result from `AXP2101_REG_VBAT_H` and returns it in millivolts.
+- `axp2101_dcdc_ctrl0_enable()` sets one or more `AXP2101_DCDC_CTRL0_EN_*` bits in `AXP2101_REG_DCDC_CTRL0`.
+- `axp2101_dcdc_ctrl0_disable()` performs a masked update on `AXP2101_REG_DCDC_CTRL0` so callers can clear or rewrite selected DCDC enable bits without disturbing the rest.
+- `axp2101_dcdc_ctrl0_get()` reads and decodes `AXP2101_REG_DCDC_CTRL0` into `axp2101_dcdc_ctrl0_t`.
+- `axp2101_dcdc1_voltage_set()` writes the DCDC1 voltage selection in `AXP2101_REG_DCDC1_V_SET`. Supported values are 1500 mV through 3400 mV in 100 mV steps.
+- `axp2101_dcdc1_voltage_get()` reads back the configured DCDC1 voltage selection from `AXP2101_REG_DCDC1_V_SET`.
 - `axp2101_ldo_ctrl0_enable()` sets one or more `AXP2101_LDO_CTRL0_EN_*` bits in `AXP2101_REG_LDO_CTRL0`.
 - `axp2101_ldo_ctrl0_disable()` performs a masked update on `AXP2101_REG_LDO_CTRL0` so callers can clear or rewrite selected LDO enable bits without disturbing the rest.
 - `axp2101_ldo_ctrl0_get()` reads and decodes `AXP2101_REG_LDO_CTRL0` into `axp2101_ldo_ctrl0_t`.
@@ -68,6 +73,10 @@ Relevant register and bit-mask exports for the newer ADC helpers include:
 - `AXP2101_REG_VBUS_H`, `AXP2101_REG_VSYS_H`, and `AXP2101_REG_VBAT_H` for the raw voltage register pairs.
 - `AXP2101_ADC_EN_VBUS`, `AXP2101_ADC_EN_VSYS`, and `AXP2101_ADC_EN_BATT` for per-channel control.
 - `AXP2101_ADC_EN_ALL` when the application wants to enable every ADC channel exported by this component.
+- `AXP2101_REG_DCDC_CTRL0` for the DCDC enable register.
+- `AXP2101_REG_DCDC1_V_SET` for the DCDC1 voltage-selection register.
+- `AXP2101_DCDC_CTRL0_EN_DCDC4`, `AXP2101_DCDC_CTRL0_EN_DCDC3`, `AXP2101_DCDC_CTRL0_EN_DCDC2`, and `AXP2101_DCDC_CTRL0_EN_DCDC1` for per-output control.
+- `AXP2101_DCDC_CTRL0_EN_ALL` when the application wants to operate on every exported DCDC enable bit at once.
 - `AXP2101_REG_PRECHG_CURRENT_LIMIT`, `AXP2101_REG_CHG_CURRENT_LIMIT`, and `AXP2101_REG_TERM_CHG_CURRENT_CTRL` for charger-current configuration.
 - `AXP2101_PRECHG_CURRENT_LIMIT_MASK`, `AXP2101_CHG_CURRENT_LIMIT_MASK`, `AXP2101_TERM_CHG_CURRENT_CTRL_TERM_EN`, and `AXP2101_TERM_CHG_CURRENT_CTRL_TERM_CURRENT_MASK` for the low-level charger-current fields.
 - `AXP2101_REG_CHGLED_CTRL`, `AXP2101_CHGLED_CTRL_ENABLE`, `AXP2101_CHGLED_CTRL_FUNCTION_MASK`, and `AXP2101_CHGLED_CTRL_OUTPUT_MASK` for charging LED control.
@@ -94,6 +103,7 @@ The PMU status helpers expose:
 - `axp2101_chgled_function_t`, with the values `TYPE_A`, `TYPE_B`, `REGISTER_CONTROL`, and `RESERVED`.
 - `axp2101_chgled_output_t`, with the values `HIZ`, `BLINK_1HZ`, `BLINK_4HZ`, and `DRIVE_LOW`.
 - `axp2101_chgled_ctrl_t`, which reports the CHGLED enable bit, function selector, and register-controlled output mode.
+- `axp2101_dcdc_ctrl0_t`, which reports the enable state of DCDC4, DCDC3, DCDC2, and DCDC1.
 
 The LDO control helper exposes:
 
@@ -221,6 +231,36 @@ int example_axp2101_configure_ldos(ii2c_device_handle_t axp2101) {
 }
 ```
 
+Example DCDC1 control:
+
+```c
+int example_axp2101_configure_dcdc1(ii2c_device_handle_t axp2101) {
+  int32_t err = axp2101_dcdc1_voltage_set(axp2101, 3300);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  err = axp2101_dcdc_ctrl0_enable(axp2101, AXP2101_DCDC_CTRL0_EN_DCDC1);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  uint16_t dcdc1_mv = 0;
+  err = axp2101_dcdc1_voltage_get(axp2101, &dcdc1_mv);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  axp2101_dcdc_ctrl0_t dcdc0 = {0};
+  err = axp2101_dcdc_ctrl0_get(axp2101, &dcdc0);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  return (dcdc0.dcdc1_en && dcdc1_mv == 3300) ? II2C_ERR_NONE : II2C_ERR_INVALID_STATE;
+}
+```
+
 ## Notes
 
 - Enable the relevant ADC channels before calling `axp2101_adc_vbus_read()`, `axp2101_adc_vsys_read()`, or `axp2101_adc_vbat_read()`. Those helpers return decoded 14-bit PMIC readings in millivolts.
@@ -230,6 +270,8 @@ int example_axp2101_configure_ldos(ii2c_device_handle_t axp2101) {
 - `axp2101_charger_current_get()` reports charger configuration values, not live battery current measurements. The decoded fields are read from the PMIC charger-control registers and returned in milliamps.
 - `axp2101_chgled_ctrl_set()` rejects the reserved CHGLED function encoding and preserves register bits `7:6` and bit `3` in `AXP2101_REG_CHGLED_CTRL`.
 - The termination-current selector in `AXP2101_REG_TERM_CHG_CURRENT_CTRL` is zero-based: selector `0` means `0 mA`, and the valid range currently decoded by this component is `0 mA` through `200 mA` in `25 mA` steps.
+- Use `axp2101_dcdc_ctrl0_enable()`, `axp2101_dcdc_ctrl0_disable()`, and `axp2101_dcdc_ctrl0_get()` for the exported `AXP2101_REG_DCDC_CTRL0` workflows instead of open-coding DCDC bit decoding in the application.
+- `axp2101_dcdc1_voltage_set()` accepts only 1500 mV through 3400 mV in 100 mV steps. This helper programs the voltage selection but does not enable the rail by itself.
 - Use `axp2101_ldo_ctrl0_enable()`, `axp2101_ldo_ctrl0_disable()`, and `axp2101_ldo_ctrl0_get()` for the exported `AXP2101_REG_LDO_CTRL0` workflows instead of open-coding LDO bit decoding in the application.
 - `axp2101_aldo1_voltage_set()` through `axp2101_aldo4_voltage_set()` and `axp2101_bldo1_voltage_set()` through `axp2101_bldo2_voltage_set()` accept only 500 mV through 3500 mV in 100 mV steps. `axp2101_dldo1_voltage_set()` accepts only 500 mV through 3300 mV in 100 mV steps. These helpers program the voltage selection but do not enable the rail by themselves.
 - The AXP2101 DLDO1 datasheet text is inconsistent: some summaries say `0.5-3.4 V`, but the `REG99H` selector table says `29 steps`, encodes `11100` as `3.3 V`, and marks `11101-11111` as reserved. This component follows the register table semantics and therefore caps DLDO1 at `3.3 V`.

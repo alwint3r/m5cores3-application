@@ -2,15 +2,15 @@
 #include "axp2101/axp2101.h"
 #include "axp2101/axp2101_register.h"
 
-typedef struct axp2101_ldo_voltage_spec_data {
+typedef struct axp2101_voltage_spec_data {
   uint8_t reg;
   uint8_t selector_mask;
   uint16_t min_mv;
   uint16_t max_mv;
   uint16_t step_mv;
-} axp2101_ldo_voltage_spec_t;
+} axp2101_voltage_spec_t;
 
-static const axp2101_ldo_voltage_spec_t AXP2101_LDO_VOLTAGE_SPEC_ALDO_BLDO = {
+static const axp2101_voltage_spec_t AXP2101_VOLTAGE_SPEC_ALDO_BLDO = {
     .reg = 0,
     .selector_mask = 0x1F,
     .min_mv = 500,
@@ -18,7 +18,7 @@ static const axp2101_ldo_voltage_spec_t AXP2101_LDO_VOLTAGE_SPEC_ALDO_BLDO = {
     .step_mv = 100,
 };
 
-static const axp2101_ldo_voltage_spec_t AXP2101_LDO_VOLTAGE_SPEC_DLDO1 = {
+static const axp2101_voltage_spec_t AXP2101_VOLTAGE_SPEC_DLDO1 = {
     /*
      * The AXP2101 datasheets we checked contain inconsistent DLDO1 wording:
      * one line says 0.5-3.4 V, but the register table also says 29 steps,
@@ -29,6 +29,14 @@ static const axp2101_ldo_voltage_spec_t AXP2101_LDO_VOLTAGE_SPEC_DLDO1 = {
     .selector_mask = 0x1F,
     .min_mv = 500,
     .max_mv = 3300,
+    .step_mv = 100,
+};
+
+static const axp2101_voltage_spec_t AXP2101_VOLTAGE_SPEC_DCDC1 = {
+    .reg = AXP2101_REG_DCDC1_V_SET,
+    .selector_mask = 0x1F,
+    .min_mv = 1500,
+    .max_mv = 3400,
     .step_mv = 100,
 };
 
@@ -111,7 +119,9 @@ static bool axp2101_chgled_output_valid(axp2101_chgled_output_t value) {
   return value >= AXP2101_CHGLED_OUTPUT_HIZ && value <= AXP2101_CHGLED_OUTPUT_DRIVE_LOW;
 }
 
-static bool axp2101_pmu_common_cfg_raw_bits_7_6_valid(uint8_t value) { return value <= 0x03; }
+static bool axp2101_pmu_common_cfg_raw_bits_7_6_valid(uint8_t value) {
+  return value <= 0x03;
+}
 
 static axp2101_charging_status_t axp2101_charging_status_from_bits(uint8_t bits) {
   switch (bits & 0x07) {
@@ -210,8 +220,8 @@ int32_t axp2101_fuel_gauge_get(ii2c_device_handle_t dev, axp2101_fuel_gauge_t *o
     return err;
   }
 
-  out->fuel_gauge_enabled =
-      (gauge_ctrl & AXP2101_CHARGE_GAUGE_WDT_CTRL_GAUGE_EN) == AXP2101_CHARGE_GAUGE_WDT_CTRL_GAUGE_EN;
+  out->fuel_gauge_enabled = (gauge_ctrl & AXP2101_CHARGE_GAUGE_WDT_CTRL_GAUGE_EN) ==
+                            AXP2101_CHARGE_GAUGE_WDT_CTRL_GAUGE_EN;
   out->battery_detection_enabled =
       (bat_det_ctrl & AXP2101_BAT_DET_CTRL_BAT_TYPE_DET_EN) == AXP2101_BAT_DET_CTRL_BAT_TYPE_DET_EN;
   out->battery_present = (status1_reg & 8) == 8;
@@ -252,14 +262,14 @@ int32_t axp2101_pmu_common_cfg_get(ii2c_device_handle_t dev, axp2101_pmu_common_
       (reg_value & AXP2101_PMU_COMMON_CFG_INTERNAL_OFF_DISCHARGE_EN) ==
       AXP2101_PMU_COMMON_CFG_INTERNAL_OFF_DISCHARGE_EN;
   out->raw_bit4 = (reg_value & AXP2101_PMU_COMMON_CFG_RAW_BIT4) == AXP2101_PMU_COMMON_CFG_RAW_BIT4;
-  out->pwrok_restart_enabled =
-      (reg_value & AXP2101_PMU_COMMON_CFG_PWROK_RESTART_EN) == AXP2101_PMU_COMMON_CFG_PWROK_RESTART_EN;
-  out->pwron_16s_shutdown_enabled =
-      (reg_value & AXP2101_PMU_COMMON_CFG_PWRON_16S_SHUTDOWN_EN) ==
-      AXP2101_PMU_COMMON_CFG_PWRON_16S_SHUTDOWN_EN;
+  out->pwrok_restart_enabled = (reg_value & AXP2101_PMU_COMMON_CFG_PWROK_RESTART_EN) ==
+                               AXP2101_PMU_COMMON_CFG_PWROK_RESTART_EN;
+  out->pwron_16s_shutdown_enabled = (reg_value & AXP2101_PMU_COMMON_CFG_PWRON_16S_SHUTDOWN_EN) ==
+                                    AXP2101_PMU_COMMON_CFG_PWRON_16S_SHUTDOWN_EN;
   out->restart_system =
       (reg_value & AXP2101_PMU_COMMON_CFG_RESTART_SYSTEM) == AXP2101_PMU_COMMON_CFG_RESTART_SYSTEM;
-  out->soft_pwroff = (reg_value & AXP2101_PMU_COMMON_CFG_SOFT_PWROFF) == AXP2101_PMU_COMMON_CFG_SOFT_PWROFF;
+  out->soft_pwroff =
+      (reg_value & AXP2101_PMU_COMMON_CFG_SOFT_PWROFF) == AXP2101_PMU_COMMON_CFG_SOFT_PWROFF;
 
   return II2C_ERR_NONE;
 }
@@ -392,8 +402,7 @@ int32_t axp2101_chgled_ctrl_get(ii2c_device_handle_t dev, axp2101_chgled_ctrl_t 
   }
 
   out->enabled = (reg_value & AXP2101_CHGLED_CTRL_ENABLE) == AXP2101_CHGLED_CTRL_ENABLE;
-  out->function =
-      (axp2101_chgled_function_t)((reg_value & AXP2101_CHGLED_CTRL_FUNCTION_MASK) >> 1);
+  out->function = (axp2101_chgled_function_t)((reg_value & AXP2101_CHGLED_CTRL_FUNCTION_MASK) >> 1);
   out->output = (axp2101_chgled_output_t)((reg_value & AXP2101_CHGLED_CTRL_OUTPUT_MASK) >> 4);
 
   return II2C_ERR_NONE;
@@ -415,8 +424,8 @@ int32_t axp2101_chgled_ctrl_set(ii2c_device_handle_t dev, const axp2101_chgled_c
   new_value |= (uint8_t)(((uint8_t)config->function) << 1);
   new_value |= (uint8_t)(((uint8_t)config->output) << 4);
 
-  uint8_t mask =
-      AXP2101_CHGLED_CTRL_ENABLE | AXP2101_CHGLED_CTRL_FUNCTION_MASK | AXP2101_CHGLED_CTRL_OUTPUT_MASK;
+  uint8_t mask = AXP2101_CHGLED_CTRL_ENABLE | AXP2101_CHGLED_CTRL_FUNCTION_MASK |
+                 AXP2101_CHGLED_CTRL_OUTPUT_MASK;
   return axp2101_reg8_update_bits(dev, AXP2101_REG_CHGLED_CTRL, mask, new_value);
 }
 
@@ -449,6 +458,33 @@ int32_t axp2101_adc_vsys_read(ii2c_device_handle_t dev, uint16_t *out_mv) {
   }
 
   return axp2101_reg14_read(dev, AXP2101_REG_VSYS_H, out_mv);
+}
+
+int32_t axp2101_dcdc_ctrl0_enable(ii2c_device_handle_t dev, uint8_t dcdc_bits) {
+  return axp2101_reg8_update_bits(dev, AXP2101_REG_DCDC_CTRL0, dcdc_bits, dcdc_bits);
+}
+
+int32_t axp2101_dcdc_ctrl0_disable(ii2c_device_handle_t dev, uint8_t mask, uint8_t dcdc_bits) {
+  return axp2101_reg8_update_bits(dev, AXP2101_REG_DCDC_CTRL0, mask, dcdc_bits);
+}
+
+int32_t axp2101_dcdc_ctrl0_get(ii2c_device_handle_t dev, axp2101_dcdc_ctrl0_t *out) {
+  if (!out) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  uint8_t dcdc_ctrl0 = 0;
+  int32_t err = axp2101_reg8_read(dev, AXP2101_REG_DCDC_CTRL0, &dcdc_ctrl0);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  out->dcdc4_en = (dcdc_ctrl0 & AXP2101_DCDC_CTRL0_EN_DCDC4) == AXP2101_DCDC_CTRL0_EN_DCDC4;
+  out->dcdc3_en = (dcdc_ctrl0 & AXP2101_DCDC_CTRL0_EN_DCDC3) == AXP2101_DCDC_CTRL0_EN_DCDC3;
+  out->dcdc2_en = (dcdc_ctrl0 & AXP2101_DCDC_CTRL0_EN_DCDC2) == AXP2101_DCDC_CTRL0_EN_DCDC2;
+  out->dcdc1_en = (dcdc_ctrl0 & AXP2101_DCDC_CTRL0_EN_DCDC1) == AXP2101_DCDC_CTRL0_EN_DCDC1;
+
+  return II2C_ERR_NONE;
 }
 
 int32_t axp2101_ldo_ctrl0_enable(ii2c_device_handle_t dev, uint8_t ldo_bits) {
@@ -496,13 +532,13 @@ static int32_t axp2101_voltage_value_validate(uint16_t value,
   return II2C_ERR_NONE;
 }
 
-static uint8_t axp2101_ldo_voltage_selector_max(const axp2101_ldo_voltage_spec_t *spec) {
+static uint8_t axp2101_voltage_selector_max(const axp2101_voltage_spec_t *spec) {
   return (uint8_t)((spec->max_mv - spec->min_mv) / spec->step_mv);
 }
 
-static int32_t axp2101_ldo_voltage_set(ii2c_device_handle_t dev,
-                                       const axp2101_ldo_voltage_spec_t *spec,
-                                       uint16_t mv) {
+static int32_t axp2101_voltage_set(ii2c_device_handle_t dev,
+                                   const axp2101_voltage_spec_t *spec,
+                                   uint16_t mv) {
   int32_t err = axp2101_voltage_value_validate(mv, spec->step_mv, spec->min_mv, spec->max_mv);
   if (err != II2C_ERR_NONE) {
     return err;
@@ -512,9 +548,9 @@ static int32_t axp2101_ldo_voltage_set(ii2c_device_handle_t dev,
   return axp2101_reg8_update_bits(dev, spec->reg, spec->selector_mask, selector);
 }
 
-static int32_t axp2101_ldo_voltage_get(ii2c_device_handle_t dev,
-                                       const axp2101_ldo_voltage_spec_t *spec,
-                                       uint16_t *out_mv) {
+static int32_t axp2101_voltage_get(ii2c_device_handle_t dev,
+                                   const axp2101_voltage_spec_t *spec,
+                                   uint16_t *out_mv) {
   if (!out_mv) {
     return II2C_ERR_INVALID_ARG;
   }
@@ -526,7 +562,7 @@ static int32_t axp2101_ldo_voltage_get(ii2c_device_handle_t dev,
   }
 
   uint8_t selector = reg_value & spec->selector_mask;
-  if (selector > axp2101_ldo_voltage_selector_max(spec)) {
+  if (selector > axp2101_voltage_selector_max(spec)) {
     return II2C_ERR_INVALID_STATE;
   }
 
@@ -535,17 +571,25 @@ static int32_t axp2101_ldo_voltage_get(ii2c_device_handle_t dev,
 }
 
 static int32_t axp2101_aldo_bldo_voltage_set(ii2c_device_handle_t dev, uint8_t reg, uint16_t mv) {
-  axp2101_ldo_voltage_spec_t spec = AXP2101_LDO_VOLTAGE_SPEC_ALDO_BLDO;
+  axp2101_voltage_spec_t spec = AXP2101_VOLTAGE_SPEC_ALDO_BLDO;
   spec.reg = reg;
-  return axp2101_ldo_voltage_set(dev, &spec, mv);
+  return axp2101_voltage_set(dev, &spec, mv);
 }
 
 static int32_t axp2101_aldo_bldo_voltage_get(ii2c_device_handle_t dev,
                                              uint8_t reg,
                                              uint16_t *out_mv) {
-  axp2101_ldo_voltage_spec_t spec = AXP2101_LDO_VOLTAGE_SPEC_ALDO_BLDO;
+  axp2101_voltage_spec_t spec = AXP2101_VOLTAGE_SPEC_ALDO_BLDO;
   spec.reg = reg;
-  return axp2101_ldo_voltage_get(dev, &spec, out_mv);
+  return axp2101_voltage_get(dev, &spec, out_mv);
+}
+
+int32_t axp2101_dcdc1_voltage_set(ii2c_device_handle_t dev, uint16_t mv) {
+  return axp2101_voltage_set(dev, &AXP2101_VOLTAGE_SPEC_DCDC1, mv);
+}
+
+int32_t axp2101_dcdc1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv) {
+  return axp2101_voltage_get(dev, &AXP2101_VOLTAGE_SPEC_DCDC1, out_mv);
 }
 
 int32_t axp2101_aldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv) {
@@ -597,11 +641,11 @@ int32_t axp2101_bldo2_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv) {
 }
 
 int32_t axp2101_dldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv) {
-  return axp2101_ldo_voltage_set(dev, &AXP2101_LDO_VOLTAGE_SPEC_DLDO1, mv);
+  return axp2101_voltage_set(dev, &AXP2101_VOLTAGE_SPEC_DLDO1, mv);
 }
 
 int32_t axp2101_dldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv) {
-  return axp2101_ldo_voltage_get(dev, &AXP2101_LDO_VOLTAGE_SPEC_DLDO1, out_mv);
+  return axp2101_voltage_get(dev, &AXP2101_VOLTAGE_SPEC_DLDO1, out_mv);
 }
 
 int32_t axp2101_reg8_read(ii2c_device_handle_t dev, uint8_t reg, uint8_t *out_value) {

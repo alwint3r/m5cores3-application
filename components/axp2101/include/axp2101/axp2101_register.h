@@ -46,6 +46,12 @@ extern "C" {
 /** @brief Charging-indicator LED control register. */
 #define AXP2101_REG_CHGLED_CTRL 0x69
 
+/** @brief DCDC enable-control register used by the `axp2101_dcdc_ctrl0_*()` helpers. */
+#define AXP2101_REG_DCDC_CTRL0 0x80
+
+/** @brief DCDC1 output-voltage register used by `axp2101_dcdc1_voltage_{set,get}()`. */
+#define AXP2101_REG_DCDC1_V_SET 0x82
+
 /** @brief LDO enable-control register used by the `axp2101_ldo_ctrl0_*()` helpers. */
 #define AXP2101_REG_LDO_CTRL0 0x90
 
@@ -76,13 +82,15 @@ extern "C" {
 /** @brief Mask for the precharge-current selector field in `AXP2101_REG_PRECHG_CURRENT_LIMIT`. */
 #define AXP2101_PRECHG_CURRENT_LIMIT_MASK 0x0F
 
-/** @brief Mask for the constant-charge-current selector field in `AXP2101_REG_CHG_CURRENT_LIMIT`. */
+/** @brief Mask for the constant-charge-current selector field in `AXP2101_REG_CHG_CURRENT_LIMIT`.
+ */
 #define AXP2101_CHG_CURRENT_LIMIT_MASK 0x1F
 
 /** @brief Enable bit for charger-current termination in `AXP2101_REG_TERM_CHG_CURRENT_CTRL`. */
 #define AXP2101_TERM_CHG_CURRENT_CTRL_TERM_EN (1 << 4)
 
-/** @brief Mask for the termination-current selector field in `AXP2101_REG_TERM_CHG_CURRENT_CTRL`. */
+/** @brief Mask for the termination-current selector field in `AXP2101_REG_TERM_CHG_CURRENT_CTRL`.
+ */
 #define AXP2101_TERM_CHG_CURRENT_CTRL_TERM_CURRENT_MASK 0x0F
 
 /** @brief Enable bit for the CHGLED pin function in `AXP2101_REG_CHGLED_CTRL`. */
@@ -123,6 +131,20 @@ extern "C" {
 
 /** @brief Battery percentage data register exported by the AXP2101 fuel gauge. */
 #define AXP2101_REG_BAT_PERCENT_DATA 0xA4
+
+/** @brief Enable bit for the DCDC4 output in `AXP2101_REG_DCDC_CTRL0`. */
+#define AXP2101_DCDC_CTRL0_EN_DCDC4 (1 << 3)
+/** @brief Enable bit for the DCDC3 output in `AXP2101_REG_DCDC_CTRL0`. */
+#define AXP2101_DCDC_CTRL0_EN_DCDC3 (1 << 2)
+/** @brief Enable bit for the DCDC2 output in `AXP2101_REG_DCDC_CTRL0`. */
+#define AXP2101_DCDC_CTRL0_EN_DCDC2 (1 << 1)
+/** @brief Enable bit for the DCDC1 output in `AXP2101_REG_DCDC_CTRL0`. */
+#define AXP2101_DCDC_CTRL0_EN_DCDC1 (1)
+
+/** @brief Bitwise OR of all exported `AXP2101_REG_DCDC_CTRL0` enable bits. */
+#define AXP2101_DCDC_CTRL0_EN_ALL                                                            \
+  (AXP2101_DCDC_CTRL0_EN_DCDC4 | AXP2101_DCDC_CTRL0_EN_DCDC3 | AXP2101_DCDC_CTRL0_EN_DCDC2 | \
+   AXP2101_DCDC_CTRL0_EN_DCDC1)
 
 /**
  * @brief Enable the GPADC general-purpose input channel.

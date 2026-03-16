@@ -16,6 +16,7 @@ static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PORT = 1;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
+static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
 
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b = NULL;
@@ -196,6 +197,37 @@ static int32_t configure_axp2101_ldos(ii2c_device_handle_t dev) {
   return II2C_ERR_NONE;
 }
 
+static int32_t configure_axp2101_dcdc1(ii2c_device_handle_t dev) {
+  int32_t err = axp2101_dcdc1_voltage_set(dev, CORES3_AXP2101_DCDC1_LCD_PWR_MV);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  err = axp2101_dcdc_ctrl0_enable(dev, AXP2101_DCDC_CTRL0_EN_DCDC1);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  uint16_t dcdc1_mv = 0;
+  err = axp2101_dcdc1_voltage_get(dev, &dcdc1_mv);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  axp2101_dcdc_ctrl0_t dcdc_state = {0};
+  err = axp2101_dcdc_ctrl0_get(dev, &dcdc_state);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  if (dcdc1_mv != CORES3_AXP2101_DCDC1_LCD_PWR_MV || !dcdc_state.dcdc1_en) {
+    return II2C_ERR_INVALID_STATE;
+  }
+
+  printf("AXP2101 DCDC1 configured to %u mV\n", dcdc1_mv);
+  return II2C_ERR_NONE;
+}
+
 static int32_t configure_axp2101_power_key(ii2c_device_handle_t dev) {
   axp2101_irq_off_on_level_t config = {
       .irq_time = AXP2101_POWER_KEY_IRQ_TIME_1S,
@@ -297,7 +329,12 @@ static int32_t configure_axp2101_adc(ii2c_device_handle_t dev) {
 }
 
 static int32_t apply_cores3_axp2101_startup(ii2c_device_handle_t dev) {
-  int32_t err = configure_axp2101_ldos(dev);
+  int32_t err = configure_axp2101_dcdc1(dev);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  err = configure_axp2101_ldos(dev);
   if (err != II2C_ERR_NONE) {
     return err;
   }

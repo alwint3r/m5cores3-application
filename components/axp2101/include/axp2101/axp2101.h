@@ -54,6 +54,19 @@ struct axp2101_ldo_ctrl0_data {
   bool aldo1_en;
 };
 
+typedef struct axp2101_dcdc_ctrl0_data axp2101_dcdc_ctrl0_t;
+/** @brief Decoded enable-state bits from `AXP2101_REG_DCDC_CTRL0`. */
+struct axp2101_dcdc_ctrl0_data {
+  /** @brief True when DCDC4 is enabled. */
+  bool dcdc4_en;
+  /** @brief True when DCDC3 is enabled. */
+  bool dcdc3_en;
+  /** @brief True when DCDC2 is enabled. */
+  bool dcdc2_en;
+  /** @brief True when DCDC1 is enabled. */
+  bool dcdc1_en;
+};
+
 /**
  * @brief Read and decode `AXP2101_REG_PMU_STATUS1`.
  *
@@ -430,6 +443,79 @@ int32_t axp2101_adc_vsys_read(ii2c_device_handle_t dev, uint16_t *out_mv);
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
 int32_t axp2101_adc_vbat_read(ii2c_device_handle_t dev, uint16_t *out_mv);
+
+/**
+ * @brief Enable one or more DCDC outputs controlled by `AXP2101_REG_DCDC_CTRL0`.
+ *
+ * This helper sets the selected enable bits while preserving the other bits
+ * already present in the register.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param dcdc_bits Bitwise OR of `AXP2101_DCDC_CTRL0_EN_*` values to enable.
+ * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
+ */
+int32_t axp2101_dcdc_ctrl0_enable(ii2c_device_handle_t dev, uint8_t dcdc_bits);
+
+/**
+ * @brief Update one or more DCDC enable bits in `AXP2101_REG_DCDC_CTRL0`.
+ *
+ * This helper performs a masked read-modify-write. Bits selected by `mask`
+ * are replaced with the corresponding values from `dcdc_bits`; all other bits
+ * remain unchanged. To clear specific outputs, pass those bits in `mask` and
+ * leave them clear in `dcdc_bits`.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param mask Bitwise OR of `AXP2101_DCDC_CTRL0_EN_*` values to update.
+ * @param dcdc_bits Replacement bit values applied under `mask`.
+ * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
+ */
+int32_t axp2101_dcdc_ctrl0_disable(ii2c_device_handle_t dev, uint8_t mask, uint8_t dcdc_bits);
+
+/**
+ * @brief Read and decode `AXP2101_REG_DCDC_CTRL0`.
+ *
+ * This helper converts each exported DCDC enable bit into a boolean field in
+ * `axp2101_dcdc_ctrl0_t`.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param out Output pointer that receives the decoded enable states.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out` is
+ * `NULL`, or an `II2C_ERR_*` code from `ii2c`.
+ */
+int32_t axp2101_dcdc_ctrl0_get(ii2c_device_handle_t dev, axp2101_dcdc_ctrl0_t *out);
+
+/**
+ * @brief Program the DCDC1 output voltage in millivolts.
+ *
+ * This helper writes `AXP2101_REG_DCDC1_V_SET` using the AXP2101 DCDC1
+ * encoding. Valid values are 1500 mV through 3400 mV in 100 mV steps.
+ * Programming the voltage does not enable the DCDC1 rail; use
+ * `axp2101_dcdc_ctrl0_enable()` separately when the output should be turned
+ * on.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param mv Requested DCDC1 output voltage in mV.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `mv` is
+ * outside the supported range or step size, or an `II2C_ERR_*` code from
+ * `ii2c`.
+ */
+int32_t axp2101_dcdc1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+
+/**
+ * @brief Read back the configured DCDC1 output voltage in millivolts.
+ *
+ * This helper reads `AXP2101_REG_DCDC1_V_SET` and decodes the stored voltage
+ * selection. It reports the programmed DCDC1 voltage setting only; use
+ * `axp2101_dcdc_ctrl0_get()` if the caller also needs to know whether DCDC1
+ * is currently enabled.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param out_mv Output pointer that receives the decoded DCDC1 voltage in mV.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out_mv` is
+ * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
+ * selector, or an `II2C_ERR_*` code from `ii2c`.
+ */
+int32_t axp2101_dcdc1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
 
 /**
  * @brief Enable one or more LDO outputs controlled by `AXP2101_REG_LDO_CTRL0`.
