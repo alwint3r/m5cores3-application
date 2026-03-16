@@ -17,6 +17,8 @@ static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PORT = 1;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
 static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
+static const uint8_t CORES3_AW9523B_LCD_RST_PORT = 1;
+static const uint8_t CORES3_AW9523B_LCD_RST_PIN = 1;
 
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b = NULL;
@@ -459,4 +461,21 @@ void app_main(void) {
   }
 
   puts("CoreS3 startup sequence complete.");
+
+  err = aw9523b_port_dir_set(aw9523b,
+                             CORES3_AW9523B_LCD_RST_PORT,
+                             CORES3_AW9523B_LCD_RST_PIN,
+                             AW9523B_PORT_DIRECTION_OUTPUT);
+  if (err != II2C_ERR_NONE) {
+    printf("Failed to set direction of the LCD reset pin: %s\n", ii2c_err_to_name(err));
+    release_handles();
+    return;
+  }
+
+  err = aw9523b_level_set(aw9523b, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
+  if (err != II2C_ERR_NONE) {
+    printf("Failed to set LCD RST logic to high: %s\n", ii2c_err_to_name(err));
+    release_handles();
+    return;
+  }
 }
