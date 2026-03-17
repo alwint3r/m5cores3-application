@@ -664,7 +664,7 @@ void app_main(void) {
   ispi_device_config_t lcd_dev_cfg = {0};
   ispi_get_default_device_config(&lcd_dev_cfg);
   lcd_dev_cfg.cs_io_num = LCD_SPI_CS;
-  lcd_dev_cfg.clock_speed_hz = 1000000;
+  lcd_dev_cfg.clock_speed_hz = 10000000;
   lcd_dev_cfg.mode = 0;
 
   err = ispi_new_device(lcd_spi, &lcd_dev_cfg, &lcd);
