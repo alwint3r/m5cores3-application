@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <aw9523b/aw9523b.h>
 #include <axp2101/axp2101.h>
@@ -8,6 +9,8 @@
 #include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
 #include <ispi/ispi.h>
+#include "open_sans_light_32.h"
+#include "bmf_reader.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -21,6 +24,7 @@ static const int32_t LCD_SPI_DC = 35;
 
 static const uint16_t LCD_WIDTH = 320;
 static const uint16_t LCD_HEIGHT = 240;
+static uint8_t LCD_BUFFER[320 * 240 * 2] = {0};
 
 static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
@@ -206,7 +210,7 @@ static int32_t lcd_set_address_window(uint16_t x0, uint16_t y0, uint16_t x1, uin
   return lcd_write_command(0x2C);
 }
 
-static int32_t lcd_fill_screen_rgb565(uint16_t color) {
+static int32_t lcd_fill_screen(uint16_t color) {
   uint8_t chunk[64 * 2];
   for (size_t i = 0; i < 64; ++i) {
     chunk[(i * 2) + 0] = (uint8_t)(color >> 8);
@@ -224,6 +228,151 @@ static int32_t lcd_fill_screen_rgb565(uint16_t color) {
   }
 
   puts("LCD display memory fill complete");
+  return ISPI_ERR_NONE;
+}
+
+inline uint8_t n_to_m_bits(uint8_t data, uint8_t n, uint8_t m) {
+  return (data * ((1 << m) - 1)) / ((1 << n) - 1);
+}
+
+static uint16_t rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t r5 = n_to_m_bits(r, 8, 5);
+  uint8_t g6 = n_to_m_bits(g, 8, 6);
+  uint8_t b5 = n_to_m_bits(b, 8, 5);
+
+  return (uint16_t)(r5 << 11) | (uint16_t)(g6 << 5) | (uint16_t)b5;
+}
+
+static int32_t lcd_fill_buffer_rgb888(uint8_t *buffer,
+                                      size_t buffer_len,
+                                      uint8_t r,
+                                      uint8_t g,
+                                      uint8_t b) {
+  if (buffer_len % 2 != 0) {
+    return ISPI_ERR_INVALID_ARG;
+  }
+
+  uint16_t color = rgb888_to_rgb565(r, g, b);
+
+  for (size_t i = 0; i < buffer_len; i += 2) {
+    buffer[i] = (uint8_t)(color >> 8);
+    buffer[i + 1] = (uint8_t)(color & 0xFF);
+  }
+
+  return ISPI_ERR_NONE;
+}
+
+static int32_t lcd_buffer_set_pixel_rgb565(uint8_t *buffer,
+                                           uint16_t buffer_width,
+                                           uint16_t buffer_height,
+                                           uint16_t x,
+                                           uint16_t y,
+                                           uint16_t color) {
+  if (buffer == NULL) {
+    return ISPI_ERR_INVALID_ARG;
+  }
+
+  if (x >= buffer_width || y >= buffer_height) {
+    return ISPI_ERR_INVALID_ARG;
+  }
+
+  size_t pixel_index = ((size_t)y * (size_t)buffer_width) + (size_t)x;
+  size_t byte_index = pixel_index * 2U;
+  buffer[byte_index + 0U] = (uint8_t)(color >> 8);
+  buffer[byte_index + 1U] = (uint8_t)(color & 0xFF);
+  return ISPI_ERR_NONE;
+}
+
+static int32_t lcd_write_buffer_chunked(const uint8_t *buffer, size_t len) {
+  if (buffer == NULL || len == 0U) {
+    return ISPI_ERR_INVALID_ARG;
+  }
+
+  size_t offset = 0U;
+  while (offset < len) {
+    size_t bytes_this_round = len - offset;
+    if (bytes_this_round >= 256U) {
+      bytes_this_round = 256U;
+    }
+    int32_t err = lcd_write_data(buffer + offset, bytes_this_round);
+    if (err != ISPI_ERR_NONE) {
+      return err;
+    }
+
+    offset += bytes_this_round;
+  }
+
+  return ISPI_ERR_NONE;
+}
+
+static int32_t lcd_render_c_str(uint8_t *buffer,
+                                size_t buffer_size,
+                                uint16_t buff_width,
+                                uint16_t buff_height,
+                                const char *text,
+                                uint16_t x,
+                                uint16_t y,
+                                bmf_font_view_t *font_view) {
+  size_t text_length = strlen(text);
+  int pen_x = x;
+  int baseline_y = y;
+
+  for (size_t i = 0; i < text_length; i++) {
+    bmf_glyph_record_t glyph;
+
+    uint32_t codepoint = (uint8_t)text[i];
+    bmf_status_t glyph_status = bmf_font_view_find_glyph(font_view, codepoint, &glyph, NULL);
+    if (glyph_status != BMF_STATUS_OK) {
+      return ISPI_ERR_FAIL;
+    }
+
+    int width = 0;
+    int height = 0;
+    const uint8_t *bitmap = bmf_font_view_get_glyph_bitmap(font_view, &glyph, &width, &height);
+    if (!bitmap || width == 0 || height == 0) {
+      pen_x += glyph.x_advance;
+      continue;
+    }
+
+    int draw_x = pen_x + glyph.x_offset;
+    int draw_y = baseline_y + glyph.y_offset;
+
+    for (int py = 0; py < height; py++) {
+      int dst_y = draw_y + py;
+      if (dst_y < 0 || dst_y >= buff_height) {
+        continue;
+      }
+
+      for (int px = 0; px < width; px++) {
+        int dst_x = draw_x + px;
+        if (dst_x < 0 || dst_x >= buff_width) {
+          continue;
+        }
+
+        int stride;
+        if (font_view->bpp == BMF_BPP_MONO) {
+          stride = (int)((width + 7) / 8);
+          int byte_idx = py * stride + px / 8;
+          int bit_idx = 7 - (px % 8);
+          uint8_t byte = bitmap[byte_idx];
+          if (((byte >> bit_idx) & 1) != 0) {
+            lcd_buffer_set_pixel_rgb565(buffer, buff_width, buff_height, dst_x, dst_y, 0);
+          }
+        } else if (font_view->bpp == BMF_BPP_GRAY8) {
+          stride = width;
+          uint8_t coverage = bitmap[py * stride + px];
+          if (coverage != 0) {
+            uint8_t shade = (uint8_t)(255 - coverage);
+            uint16_t color = rgb888_to_rgb565(shade, shade, shade);
+            lcd_buffer_set_pixel_rgb565(buffer, buff_width, buff_height, dst_x, dst_y, color);
+          }
+        }
+      }
+    }
+
+    pen_x += glyph.x_advance;
+  }
+
   return ISPI_ERR_NONE;
 }
 
@@ -941,18 +1090,83 @@ void app_main(void) {
     return;
   }
 
-  // err = lcd_fill_screen_rgb565(0xF800);
-  // if (err != ISPI_ERR_NONE) {
-  //   printf("Failed to fill LCD memory: %ld\n", (long)err);
-  //   release_handles();
-  //   return;
-  // }
-
+#if 0
   uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
   for (size_t i = 0; i < 4; i++) {
     lcd_fill_screen_rgb565(colors[i]);
     delay_ms(1000);
   }
+#endif
 
   puts("LCD smoke test complete");
+  size_t lcd_buffer_size = LCD_WIDTH * LCD_HEIGHT * 2;
+
+#if 1
+  const char *msg = "Hello Graphics From Scratch!";
+
+  bmf_font_view_t font_view;
+  bmf_font_view_init(&font_view);
+  bmf_status_t bmf_ret =
+      bmf_font_view_load_bytes(&font_view, open_sans_light_32, open_sans_light_32_len);
+  if (bmf_ret != BMF_STATUS_OK) {
+    printf("Failed to load font: %d\n", (int)bmf_ret);
+    release_handles();
+    return;
+  }
+
+  lcd_fill_buffer_rgb888(LCD_BUFFER, lcd_buffer_size, 255, 255, 0);
+
+  err =
+      lcd_render_c_str(LCD_BUFFER, lcd_buffer_size, LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, &font_view);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to render string into the buffer: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  err = lcd_write_buffer_chunked(LCD_BUFFER, lcd_buffer_size);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed to flush buffer to display RAM: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+#endif
+
+#if 0
+  const uint16_t RECT_X = 40;
+  const uint16_t RECT_Y = 30;
+  const uint16_t RECT_W = 96;
+  const uint16_t RECT_H = 64;
+
+  memset(LCD_BUFFER, 0xFF, lcd_buffer_size);
+
+  for (uint16_t y = 0; y < RECT_H; ++y) {
+    uint16_t draw_y = RECT_Y + y;
+    if (draw_y >= LCD_HEIGHT) {
+      continue;
+    }
+
+    for (uint16_t x = 0; x < RECT_W; ++x) {
+      uint16_t draw_x = RECT_X + x;
+      if (draw_x >= LCD_WIDTH) {
+        continue;
+      }
+
+      int32_t err =
+          lcd_buffer_set_pixel_rgb565(LCD_BUFFER, LCD_WIDTH, LCD_HEIGHT, draw_x, draw_y, 0xF800);
+      if (err != ISPI_ERR_NONE) {
+        printf("Failed setting pixel value: %ld\n", (long)err);
+        release_handles();
+        return;
+      }
+    }
+  }
+
+  err = lcd_write_buffer_chunked(LCD_BUFFER, lcd_buffer_size);
+  if (err != ISPI_ERR_NONE) {
+    printf("Failed writing buffer: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+#endif
 }
