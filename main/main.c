@@ -24,7 +24,7 @@ static const int32_t LCD_SPI_DC = 35;
 
 static const uint16_t LCD_WIDTH = 320;
 static const uint16_t LCD_HEIGHT = 240;
-static uint8_t LCD_BUFFER[320 * 240 * 2] = {0};
+static uint8_t LCD_ROW_BUFFER[320 * 2] = {0};
 
 static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
@@ -243,31 +243,28 @@ static uint16_t rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)(r5 << 11) | (uint16_t)(g6 << 5) | (uint16_t)b5;
 }
 
-static int32_t lcd_fill_buffer_rgb888(uint8_t *buffer,
-                                      size_t buffer_len,
-                                      uint8_t r,
-                                      uint8_t g,
-                                      uint8_t b) {
-  if (buffer_len % 2 != 0) {
+static __attribute__((unused)) int32_t
+lcd_fill_buffer_rgb888(uint8_t *buffer, size_t buffer_len, uint8_t r, uint8_t g, uint8_t b) {
+  if (buffer == NULL || (buffer_len % 2U) != 0U) {
     return ISPI_ERR_INVALID_ARG;
   }
 
   uint16_t color = rgb888_to_rgb565(r, g, b);
 
-  for (size_t i = 0; i < buffer_len; i += 2) {
+  for (size_t i = 0; i < buffer_len; i += 2U) {
     buffer[i] = (uint8_t)(color >> 8);
-    buffer[i + 1] = (uint8_t)(color & 0xFF);
+    buffer[i + 1U] = (uint8_t)(color & 0xFF);
   }
 
   return ISPI_ERR_NONE;
 }
 
-static int32_t lcd_buffer_set_pixel_rgb565(uint8_t *buffer,
-                                           uint16_t buffer_width,
-                                           uint16_t buffer_height,
-                                           uint16_t x,
-                                           uint16_t y,
-                                           uint16_t color) {
+static __attribute__((unused)) int32_t lcd_buffer_set_pixel_rgb565(uint8_t *buffer,
+                                                                   uint16_t buffer_width,
+                                                                   uint16_t buffer_height,
+                                                                   uint16_t x,
+                                                                   uint16_t y,
+                                                                   uint16_t color) {
   if (buffer == NULL) {
     return ISPI_ERR_INVALID_ARG;
   }
@@ -305,17 +302,26 @@ static int32_t lcd_write_buffer_chunked(const uint8_t *buffer, size_t len) {
   return ISPI_ERR_NONE;
 }
 
-static int32_t lcd_render_c_str(uint8_t *buffer,
-                                size_t buffer_size,
-                                uint16_t buff_width,
-                                uint16_t buff_height,
-                                const char *text,
-                                uint16_t x,
-                                uint16_t y,
-                                bmf_font_view_t *font_view) {
+static int32_t lcd_render_c_str_direct(uint16_t screen_width,
+                                       uint16_t screen_height,
+                                       const char *text,
+                                       uint16_t x,
+                                       uint16_t y,
+                                       uint16_t background_color,
+                                       bmf_font_view_t *font_view) {
+  if (text == NULL || font_view == NULL || screen_width == 0U || screen_height == 0U ||
+      screen_width > LCD_WIDTH) {
+    return ISPI_ERR_INVALID_ARG;
+  }
+
   size_t text_length = strlen(text);
-  int pen_x = x;
   int baseline_y = y;
+  int text_clip_x0 = 0;
+  int text_clip_y0 = 0;
+  int text_clip_x1 = 0;
+  int text_clip_y1 = 0;
+  bool has_visible_pixels = false;
+  int pen_x = x;
 
   for (size_t i = 0; i < text_length; i++) {
     bmf_glyph_record_t glyph;
@@ -336,41 +342,144 @@ static int32_t lcd_render_c_str(uint8_t *buffer,
 
     int draw_x = pen_x + glyph.x_offset;
     int draw_y = baseline_y + glyph.y_offset;
+    int clip_x0 = draw_x < 0 ? 0 : draw_x;
+    int clip_y0 = draw_y < 0 ? 0 : draw_y;
+    int clip_x1 = draw_x + width - 1;
+    int clip_y1 = draw_y + height - 1;
 
-    for (int py = 0; py < height; py++) {
-      int dst_y = draw_y + py;
-      if (dst_y < 0 || dst_y >= buff_height) {
-        continue;
+    if (clip_x0 >= screen_width || clip_y0 >= screen_height || clip_x1 < 0 || clip_y1 < 0) {
+      pen_x += glyph.x_advance;
+      continue;
+    }
+
+    if (clip_x1 >= screen_width) {
+      clip_x1 = (int)screen_width - 1;
+    }
+
+    if (clip_y1 >= screen_height) {
+      clip_y1 = (int)screen_height - 1;
+    }
+
+    if (!has_visible_pixels) {
+      text_clip_x0 = clip_x0;
+      text_clip_y0 = clip_y0;
+      text_clip_x1 = clip_x1;
+      text_clip_y1 = clip_y1;
+      has_visible_pixels = true;
+    } else {
+      if (clip_x0 < text_clip_x0) {
+        text_clip_x0 = clip_x0;
       }
-
-      for (int px = 0; px < width; px++) {
-        int dst_x = draw_x + px;
-        if (dst_x < 0 || dst_x >= buff_width) {
-          continue;
-        }
-
-        int stride;
-        if (font_view->bpp == BMF_BPP_MONO) {
-          stride = (int)((width + 7) / 8);
-          int byte_idx = py * stride + px / 8;
-          int bit_idx = 7 - (px % 8);
-          uint8_t byte = bitmap[byte_idx];
-          if (((byte >> bit_idx) & 1) != 0) {
-            lcd_buffer_set_pixel_rgb565(buffer, buff_width, buff_height, dst_x, dst_y, 0);
-          }
-        } else if (font_view->bpp == BMF_BPP_GRAY8) {
-          stride = width;
-          uint8_t coverage = bitmap[py * stride + px];
-          if (coverage != 0) {
-            uint8_t shade = (uint8_t)(255 - coverage);
-            uint16_t color = rgb888_to_rgb565(shade, shade, shade);
-            lcd_buffer_set_pixel_rgb565(buffer, buff_width, buff_height, dst_x, dst_y, color);
-          }
-        }
+      if (clip_y0 < text_clip_y0) {
+        text_clip_y0 = clip_y0;
+      }
+      if (clip_x1 > text_clip_x1) {
+        text_clip_x1 = clip_x1;
+      }
+      if (clip_y1 > text_clip_y1) {
+        text_clip_y1 = clip_y1;
       }
     }
 
     pen_x += glyph.x_advance;
+  }
+
+  if (!has_visible_pixels) {
+    return ISPI_ERR_NONE;
+  }
+
+  size_t row_pixels = (size_t)(text_clip_x1 - text_clip_x0 + 1);
+  size_t row_bytes = row_pixels * 2U;
+  uint8_t background_hi = (uint8_t)(background_color >> 8);
+  uint8_t background_lo = (uint8_t)(background_color & 0xFF);
+
+  for (int dst_y = text_clip_y0; dst_y <= text_clip_y1; dst_y++) {
+    for (size_t row_offset = 0; row_offset < row_bytes; row_offset += 2U) {
+      LCD_ROW_BUFFER[row_offset + 0U] = background_hi;
+      LCD_ROW_BUFFER[row_offset + 1U] = background_lo;
+    }
+
+    pen_x = x;
+
+    for (size_t i = 0; i < text_length; i++) {
+      bmf_glyph_record_t glyph;
+
+      uint32_t codepoint = (uint8_t)text[i];
+      bmf_status_t glyph_status = bmf_font_view_find_glyph(font_view, codepoint, &glyph, NULL);
+      if (glyph_status != BMF_STATUS_OK) {
+        return ISPI_ERR_FAIL;
+      }
+
+      int width = 0;
+      int height = 0;
+      const uint8_t *bitmap = bmf_font_view_get_glyph_bitmap(font_view, &glyph, &width, &height);
+      if (!bitmap || width == 0 || height == 0) {
+        pen_x += glyph.x_advance;
+        continue;
+      }
+
+      int draw_x = pen_x + glyph.x_offset;
+      int draw_y = baseline_y + glyph.y_offset;
+      int draw_y1 = draw_y + height - 1;
+      if (dst_y < draw_y || dst_y > draw_y1) {
+        pen_x += glyph.x_advance;
+        continue;
+      }
+
+      int clip_x0 = draw_x < text_clip_x0 ? text_clip_x0 : draw_x;
+      int clip_x1 = draw_x + width - 1;
+      if (clip_x1 > text_clip_x1) {
+        clip_x1 = text_clip_x1;
+      }
+
+      if (clip_x0 <= clip_x1) {
+        int stride = 0;
+        if (font_view->bpp == BMF_BPP_MONO) {
+          stride = (int)((width + 7) / 8);
+        } else if (font_view->bpp == BMF_BPP_GRAY8) {
+          stride = width;
+        } else {
+          return ISPI_ERR_INVALID_ARG;
+        }
+
+        int src_y = dst_y - draw_y;
+        for (int dst_x = clip_x0; dst_x <= clip_x1; dst_x++) {
+          int src_x = dst_x - draw_x;
+          size_t row_offset = (size_t)(dst_x - text_clip_x0) * 2U;
+
+          if (font_view->bpp == BMF_BPP_MONO) {
+            int byte_idx = src_y * stride + src_x / 8;
+            int bit_idx = 7 - (src_x % 8);
+            uint8_t byte = bitmap[byte_idx];
+            if (((byte >> bit_idx) & 1U) != 0U) {
+              LCD_ROW_BUFFER[row_offset + 0U] = 0x00;
+              LCD_ROW_BUFFER[row_offset + 1U] = 0x00;
+            }
+          } else {
+            uint8_t coverage = bitmap[src_y * stride + src_x];
+            if (coverage != 0U) {
+              uint8_t shade = (uint8_t)(255U - coverage);
+              uint16_t color = rgb888_to_rgb565(shade, shade, shade);
+              LCD_ROW_BUFFER[row_offset + 0U] = (uint8_t)(color >> 8);
+              LCD_ROW_BUFFER[row_offset + 1U] = (uint8_t)(color & 0xFF);
+            }
+          }
+        }
+      }
+
+      pen_x += glyph.x_advance;
+    }
+
+    int32_t err = lcd_set_address_window(
+        (uint16_t)text_clip_x0, (uint16_t)dst_y, (uint16_t)text_clip_x1, (uint16_t)dst_y);
+    if (err != ISPI_ERR_NONE) {
+      return err;
+    }
+
+    err = lcd_write_buffer_chunked(LCD_ROW_BUFFER, row_bytes);
+    if (err != ISPI_ERR_NONE) {
+      return err;
+    }
   }
 
   return ISPI_ERR_NONE;
@@ -1099,10 +1208,9 @@ void app_main(void) {
 #endif
 
   puts("LCD smoke test complete");
-  size_t lcd_buffer_size = LCD_WIDTH * LCD_HEIGHT * 2;
 
-#if 1
-  const char *msg = "Hello Graphics From Scratch!";
+  const char *msg = "jet me up face & at";
+  uint16_t background_color = rgb888_to_rgb565(255, 255, 0);
 
   bmf_font_view_t font_view;
   bmf_font_view_init(&font_view);
@@ -1114,23 +1222,19 @@ void app_main(void) {
     return;
   }
 
-  lcd_fill_buffer_rgb888(LCD_BUFFER, lcd_buffer_size, 255, 255, 0);
-
-  err =
-      lcd_render_c_str(LCD_BUFFER, lcd_buffer_size, LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, &font_view);
+  err = lcd_fill_screen(background_color);
   if (err != ISPI_ERR_NONE) {
-    printf("Failed to render string into the buffer: %ld\n", (long)err);
+    printf("Failed to fill the LCD background: %ld\n", (long)err);
     release_handles();
     return;
   }
 
-  err = lcd_write_buffer_chunked(LCD_BUFFER, lcd_buffer_size);
+  err = lcd_render_c_str_direct(LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, background_color, &font_view);
   if (err != ISPI_ERR_NONE) {
-    printf("Failed to flush buffer to display RAM: %ld\n", (long)err);
+    printf("Failed to render string directly to the LCD: %ld\n", (long)err);
     release_handles();
     return;
   }
-#endif
 
 #if 0
   const uint16_t RECT_X = 40;
