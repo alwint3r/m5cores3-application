@@ -302,12 +302,30 @@ static int32_t lcd_write_buffer_chunked(const uint8_t *buffer, size_t len) {
   return ISPI_ERR_NONE;
 }
 
+static uint16_t blend_rgb565(uint16_t bg, uint16_t fg, uint8_t coverage) {
+  uint32_t bg_r = (bg >> 12) & 0x1F;
+  uint32_t bg_g = (bg >> 5) & 0x3F;
+  uint32_t bg_b = bg & 0x1F;
+
+  uint32_t fg_r = (fg >> 12) & 0x1F;
+  uint32_t fg_g = (fg >> 5) & 0x3F;
+  uint32_t fg_b = fg & 0x1F;
+
+  uint32_t inv = 255U - coverage;
+  uint32_t out_r = (fg_r * coverage + bg_r * inv + 127U) / 255U;
+  uint32_t out_g = (fg_g * coverage + bg_g * inv + 127U) / 255U;
+  uint32_t out_b = (fg_b * coverage + bg_b * inv + 127U) / 255U;
+
+  return (uint16_t)((out_r << 11) | (out_g << 5) | out_b);
+}
+
 static int32_t lcd_render_c_str_direct(uint16_t screen_width,
                                        uint16_t screen_height,
                                        const char *text,
                                        uint16_t x,
                                        uint16_t y,
                                        uint16_t background_color,
+                                       uint16_t foreground_color,
                                        bmf_font_view_t *font_view) {
   if (text == NULL || font_view == NULL || screen_width == 0U || screen_height == 0U ||
       screen_width > LCD_WIDTH) {
@@ -452,14 +470,13 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
             int bit_idx = 7 - (src_x % 8);
             uint8_t byte = bitmap[byte_idx];
             if (((byte >> bit_idx) & 1U) != 0U) {
-              LCD_ROW_BUFFER[row_offset + 0U] = 0x00;
-              LCD_ROW_BUFFER[row_offset + 1U] = 0x00;
+              LCD_ROW_BUFFER[row_offset + 0U] = (uint8_t)(foreground_color >> 8);
+              LCD_ROW_BUFFER[row_offset + 1U] = (uint8_t)(foreground_color & 0xFF);
             }
           } else {
             uint8_t coverage = bitmap[src_y * stride + src_x];
             if (coverage != 0U) {
-              uint8_t shade = (uint8_t)(255U - coverage);
-              uint16_t color = rgb888_to_rgb565(shade, shade, shade);
+              uint16_t color = blend_rgb565(background_color, foreground_color, coverage);
               LCD_ROW_BUFFER[row_offset + 0U] = (uint8_t)(color >> 8);
               LCD_ROW_BUFFER[row_offset + 1U] = (uint8_t)(color & 0xFF);
             }
@@ -1229,7 +1246,9 @@ void app_main(void) {
     return;
   }
 
-  err = lcd_render_c_str_direct(LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, background_color, &font_view);
+  uint16_t foreground_color = 0x0000;
+  err = lcd_render_c_str_direct(
+      LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, background_color, foreground_color, &font_view);
   if (err != ISPI_ERR_NONE) {
     printf("Failed to render string directly to the LCD: %ld\n", (long)err);
     release_handles();
