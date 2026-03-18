@@ -11,7 +11,7 @@
 #include <ii2c/ii2c.h>
 #include <ili9342/ili9342.h>
 #include <ispi/ispi.h>
-#include "open_sans_light_24.h"
+#include "open_sans_regular_24.h"
 #include "bmf_reader.h"
 
 #include <freertos/FreeRTOS.h>
@@ -1090,7 +1090,7 @@ void app_main(void) {
   bmf_font_view_t font_view;
   bmf_font_view_init(&font_view);
   bmf_status_t bmf_ret =
-      bmf_font_view_load_bytes(&font_view, open_sans_light_24, open_sans_light_24_len);
+      bmf_font_view_load_bytes(&font_view, open_sans_regular_24, open_sans_regular_24_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
     release_handles();
