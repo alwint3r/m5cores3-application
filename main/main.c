@@ -1065,6 +1065,14 @@ void app_main(void) {
     return;
   }
 
+  err = ili9342_memory_access_control_set(
+      &display, ILI9342_MADCTL_BGR | ILI9342_MADCTL_MX | ILI9342_MADCTL_MY);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed setting the memory access control: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
   puts("LCD panel init commands complete");
 
   err = ili9342_address_window_set(&display, 0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
@@ -1085,7 +1093,7 @@ void app_main(void) {
   puts("LCD smoke test complete");
 
   const char *msg = "jet me up face & at";
-  uint16_t background_color = rgb888_to_rgb565(255, 255, 0);
+  uint16_t background_color = rgb888_to_rgb565(0, 0, 0);
 
   bmf_font_view_t font_view;
   bmf_font_view_init(&font_view);
@@ -1107,7 +1115,7 @@ void app_main(void) {
   int64_t fill_dur = esp_timer_get_time() - fill_start;
   printf("Fill duration: %lld ms\n", fill_dur / 1000);
   int64_t start = esp_timer_get_time();
-  uint16_t foreground_color = 0x0000;
+  uint16_t foreground_color = 0xFFFF;
   lcd_render_stats_t render_stats = {0};
   err = lcd_render_c_str_direct(LCD_WIDTH,
                                 LCD_HEIGHT,
