@@ -9,4 +9,6 @@ idf_component_register(
 	aw9523b
 	ispi
 	igpio
+	ili9342
+	esp_timer
 )

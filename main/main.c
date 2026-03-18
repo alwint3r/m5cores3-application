@@ -8,12 +8,14 @@
 #include <axp2101/axp2101_register.h>
 #include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
+#include <ili9342/ili9342.h>
 #include <ispi/ispi.h>
-#include "open_sans_light_32.h"
+#include "open_sans_light_24.h"
 #include "bmf_reader.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_timer.h>
 
 static const int32_t SYS_I2C_SDA = 12;
 static const int32_t SYS_I2C_SCL = 11;
@@ -172,45 +174,11 @@ static int32_t lcd_hard_reset(void) {
   return II2C_ERR_NONE;
 }
 
-static int32_t lcd_set_address_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  uint8_t column_data[4] = {
-      (uint8_t)(x0 >> 8),
-      (uint8_t)(x0 & 0xFF),
-      (uint8_t)(x1 >> 8),
-      (uint8_t)(x1 & 0xFF),
-  };
-
-  uint8_t row_data[4] = {
-      (uint8_t)(y0 >> 8),
-      (uint8_t)(y0 & 0xFF),
-      (uint8_t)(y1 >> 8),
-      (uint8_t)(y1 & 0xFF),
-  };
-
-  int32_t err = lcd_write_command(0x2A);
-  if (err != ISPI_ERR_NONE) {
-    return err;
+static int32_t lcd_fill_screen(ili9342_t *display, uint16_t color) {
+  if (display == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
   }
 
-  err = lcd_write_data(column_data, sizeof(column_data));
-  if (err != ISPI_ERR_NONE) {
-    return err;
-  }
-
-  err = lcd_write_command(0x2B);
-  if (err != ISPI_ERR_NONE) {
-    return err;
-  }
-
-  err = lcd_write_data(row_data, sizeof(row_data));
-  if (err != ISPI_ERR_NONE) {
-    return err;
-  }
-
-  return lcd_write_command(0x2C);
-}
-
-static int32_t lcd_fill_screen(uint16_t color) {
   uint8_t chunk[64 * 2];
   for (size_t i = 0; i < 64; ++i) {
     chunk[(i * 2) + 0] = (uint8_t)(color >> 8);
@@ -220,15 +188,15 @@ static int32_t lcd_fill_screen(uint16_t color) {
   size_t pixels_remaining = (size_t)LCD_WIDTH * (size_t)LCD_HEIGHT;
   while (pixels_remaining > 0) {
     size_t pixels_this_round = pixels_remaining > 64 ? 64 : pixels_remaining;
-    int32_t err = lcd_write_data(chunk, pixels_this_round * 2);
-    if (err != ISPI_ERR_NONE) {
+    int32_t err = ili9342_write_data(display, chunk, pixels_this_round * 2);
+    if (err != ILI9342_ERR_NONE) {
       return err;
     }
     pixels_remaining -= pixels_this_round;
   }
 
   puts("LCD display memory fill complete");
-  return ISPI_ERR_NONE;
+  return ILI9342_ERR_NONE;
 }
 
 inline uint8_t n_to_m_bits(uint8_t data, uint8_t n, uint8_t m) {
@@ -280,9 +248,9 @@ static __attribute__((unused)) int32_t lcd_buffer_set_pixel_rgb565(uint8_t *buff
   return ISPI_ERR_NONE;
 }
 
-static int32_t lcd_write_buffer_chunked(const uint8_t *buffer, size_t len) {
-  if (buffer == NULL || len == 0U) {
-    return ISPI_ERR_INVALID_ARG;
+static int32_t lcd_write_buffer_chunked(ili9342_t *display, const uint8_t *buffer, size_t len) {
+  if (display == NULL || buffer == NULL || len == 0U) {
+    return ILI9342_ERR_INVALID_ARG;
   }
 
   size_t offset = 0U;
@@ -291,8 +259,8 @@ static int32_t lcd_write_buffer_chunked(const uint8_t *buffer, size_t len) {
     if (bytes_this_round >= 256U) {
       bytes_this_round = 256U;
     }
-    int32_t err = lcd_write_data(buffer + offset, bytes_this_round);
-    if (err != ISPI_ERR_NONE) {
+    int32_t err = ili9342_write_data(display, buffer + offset, bytes_this_round);
+    if (err != ILI9342_ERR_NONE) {
       return err;
     }
 
@@ -303,11 +271,11 @@ static int32_t lcd_write_buffer_chunked(const uint8_t *buffer, size_t len) {
 }
 
 static uint16_t blend_rgb565(uint16_t bg, uint16_t fg, uint8_t coverage) {
-  uint32_t bg_r = (bg >> 12) & 0x1F;
+  uint32_t bg_r = (bg >> 11) & 0x1F;
   uint32_t bg_g = (bg >> 5) & 0x3F;
   uint32_t bg_b = bg & 0x1F;
 
-  uint32_t fg_r = (fg >> 12) & 0x1F;
+  uint32_t fg_r = (fg >> 11) & 0x1F;
   uint32_t fg_g = (fg >> 5) & 0x3F;
   uint32_t fg_b = fg & 0x1F;
 
@@ -326,10 +294,11 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
                                        uint16_t y,
                                        uint16_t background_color,
                                        uint16_t foreground_color,
-                                       bmf_font_view_t *font_view) {
-  if (text == NULL || font_view == NULL || screen_width == 0U || screen_height == 0U ||
-      screen_width > LCD_WIDTH) {
-    return ISPI_ERR_INVALID_ARG;
+                                       bmf_font_view_t *font_view,
+                                       ili9342_t *display) {
+  if (display == NULL || text == NULL || font_view == NULL || screen_width == 0U ||
+      screen_height == 0U || screen_width > LCD_WIDTH) {
+    return ILI9342_ERR_INVALID_ARG;
   }
 
   size_t text_length = strlen(text);
@@ -487,14 +456,14 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
       pen_x += glyph.x_advance;
     }
 
-    int32_t err = lcd_set_address_window(
-        (uint16_t)text_clip_x0, (uint16_t)dst_y, (uint16_t)text_clip_x1, (uint16_t)dst_y);
-    if (err != ISPI_ERR_NONE) {
+    int32_t err = ili9342_address_window_set(
+        display, (uint16_t)text_clip_x0, (uint16_t)dst_y, (uint16_t)text_clip_x1, (uint16_t)dst_y);
+    if (err != ILI9342_ERR_NONE) {
       return err;
     }
 
-    err = lcd_write_buffer_chunked(LCD_ROW_BUFFER, row_bytes);
-    if (err != ISPI_ERR_NONE) {
+    err = lcd_write_buffer_chunked(display, LCD_ROW_BUFFER, row_bytes);
+    if (err != ILI9342_ERR_NONE) {
       return err;
     }
   }
@@ -956,261 +925,23 @@ void app_main(void) {
     return;
   }
 
-  err = lcd_write_command(0x01);  // SWRESET
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD SWRESET: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
+  ili9342_t display = {
+      .transport_data_write = lcd_write_data,
+      .transport_command_write = lcd_write_command,
+      .delay_fn = delay_ms,
+  };
 
-  delay_ms(120);
-
-  err = lcd_write_command(0xC8);  // SETEXTC
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD SETEXTC: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-
-  {
-    const uint8_t data[] = {0xFF, 0x93, 0x42};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD SETEXTC data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xC0);  // PWCTR1
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD PWCTR1: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-
-  {
-    const uint8_t data[] = {0x12, 0x12};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD PWCTR1 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xC1);  // PWCTR2
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD PWCTR2: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0x03};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD PWCTR2 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xC5);  // VMCTR1
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD VMCTR1: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0xF2};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD VMCTR1 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xB0);
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD B0: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0xE0};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD B0 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xF6);
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD F6: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0x01, 0x00, 0x00};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD F6 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xE0);
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD E0: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {
-        0x00,
-        0x0C,
-        0x11,
-        0x04,
-        0x11,
-        0x08,
-        0x37,
-        0x89,
-        0x4C,
-        0x06,
-        0x0C,
-        0x0A,
-        0x2E,
-        0x34,
-        0x0F,
-    };
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD E0 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xE1);
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD E1: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {
-        0x00,
-        0x0B,
-        0x11,
-        0x05,
-        0x13,
-        0x09,
-        0x33,
-        0x67,
-        0x48,
-        0x07,
-        0x0E,
-        0x0B,
-        0x2E,
-        0x33,
-        0x0F,
-    };
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD E1 data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0xB6);  // DFUNCTR
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD DFUNCTR: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0x08, 0x82, 0x1D, 0x04};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD DFUNCTR data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0x11);  // SLPOUT
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD SLPOUT: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-
-  delay_ms(120);
-
-  err = lcd_write_command(0x21);  // INVON
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD INVON: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-
-  err = lcd_write_command(0x3A);  // COLMOD
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD COLMOD: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0x55};  // 16-bit RGB565
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write LCD COLMOD data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0x36);  // MADCTL
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD MADCTL: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-  {
-    const uint8_t data[] = {0x08};
-    err = lcd_write_data(data, sizeof(data));
-    if (err != ISPI_ERR_NONE) {
-      printf("Failed to write MADCTL data: %ld\n", (long)err);
-      release_handles();
-      return;
-    }
-  }
-
-  err = lcd_write_command(0x38);  // IDMOFF
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD IDMOFF: %ld\n", (long)err);
+  err = ili9342_init_default(&display);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed to initialize LCD controller: %ld\n", (long)err);
     release_handles();
     return;
   }
 
   puts("LCD panel init commands complete");
 
-  err = lcd_write_command(0x29);  // DISPON
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to send LCD DISPON: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-
-  delay_ms(20);
-
-  err = lcd_set_address_window(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
-  if (err != ISPI_ERR_NONE) {
+  err = ili9342_address_window_set(&display, 0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
+  if (err != ILI9342_ERR_NONE) {
     printf("Failed to set LCD address window: %ld\n", (long)err);
     release_handles();
     return;
@@ -1232,28 +963,31 @@ void app_main(void) {
   bmf_font_view_t font_view;
   bmf_font_view_init(&font_view);
   bmf_status_t bmf_ret =
-      bmf_font_view_load_bytes(&font_view, open_sans_light_32, open_sans_light_32_len);
+      bmf_font_view_load_bytes(&font_view, open_sans_light_24, open_sans_light_24_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
     release_handles();
     return;
   }
 
-  err = lcd_fill_screen(background_color);
-  if (err != ISPI_ERR_NONE) {
+  err = lcd_fill_screen(&display, background_color);
+  if (err != ILI9342_ERR_NONE) {
     printf("Failed to fill the LCD background: %ld\n", (long)err);
     release_handles();
     return;
   }
-
+  int64_t start = esp_timer_get_time();
   uint16_t foreground_color = 0x0000;
   err = lcd_render_c_str_direct(
-      LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, background_color, foreground_color, &font_view);
-  if (err != ISPI_ERR_NONE) {
+      LCD_WIDTH, LCD_HEIGHT, msg, 2, 33, background_color, foreground_color, &font_view, &display);
+  if (err != ILI9342_ERR_NONE) {
     printf("Failed to render string directly to the LCD: %ld\n", (long)err);
     release_handles();
     return;
   }
+
+  int64_t dur = esp_timer_get_time() - start;
+  printf("Render duration: %lld ms\n", dur / 1000);
 
 #if 0
   const uint16_t RECT_X = 40;
@@ -1285,8 +1019,8 @@ void app_main(void) {
     }
   }
 
-  err = lcd_write_buffer_chunked(LCD_BUFFER, lcd_buffer_size);
-  if (err != ISPI_ERR_NONE) {
+  err = lcd_write_buffer_chunked(&display, LCD_BUFFER, lcd_buffer_size);
+  if (err != ILI9342_ERR_NONE) {
     printf("Failed writing buffer: %ld\n", (long)err);
     release_handles();
     return;
