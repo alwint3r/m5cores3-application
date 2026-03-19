@@ -11,7 +11,7 @@
 #include <ii2c/ii2c.h>
 #include <ili9342/ili9342.h>
 #include <ispi/ispi.h>
-#include "open_sans_regular_24.h"
+#include "open_sans_regular_32_4bpp.h"
 #include "bmf_reader.h"
 
 #include <freertos/FreeRTOS.h>
@@ -405,6 +405,8 @@ static int32_t lcd_prepare_glyph_run(uint16_t screen_width,
     int stride = 0;
     if (font_view->bpp == BMF_BPP_MONO) {
       stride = (int)((width + 7) / 8);
+    } else if (font_view->bpp == BMF_BPP_GRAY4) {
+      stride = (int)((width + 1) / 2);
     } else if (font_view->bpp == BMF_BPP_GRAY8) {
       stride = width;
     } else {
@@ -568,6 +570,16 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
             if (((byte >> bit_idx) & 1U) != 0U) {
               LCD_ROW_BUFFER[row_offset + 0U] = (uint8_t)(foreground_color >> 8);
               LCD_ROW_BUFFER[row_offset + 1U] = (uint8_t)(foreground_color & 0xFF);
+            }
+          } else if (font_view->bpp == BMF_BPP_GRAY4) {
+            int byte_idx = src_y * prepared->stride + src_x / 2;
+            uint8_t byte = prepared->bitmap[byte_idx];
+            uint8_t coverage = (src_x % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
+            coverage = (coverage << 4) | coverage;
+            if (coverage != 0U) {
+              uint16_t color = blend_rgb565(background_color, foreground_color, coverage);
+              LCD_ROW_BUFFER[row_offset + 0U] = (uint8_t)(color >> 8);
+              LCD_ROW_BUFFER[row_offset + 1U] = (uint8_t)(color & 0xFF);
             }
           } else {
             uint8_t coverage = prepared->bitmap[src_y * prepared->stride + src_x];
@@ -1098,7 +1110,7 @@ void app_main(void) {
   bmf_font_view_t font_view;
   bmf_font_view_init(&font_view);
   bmf_status_t bmf_ret =
-      bmf_font_view_load_bytes(&font_view, open_sans_regular_24, open_sans_regular_24_len);
+      bmf_font_view_load_bytes(&font_view, open_sans_regular_32, open_sans_regular_32_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
     release_handles();

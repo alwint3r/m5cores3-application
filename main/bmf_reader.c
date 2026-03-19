@@ -20,6 +20,8 @@ static int row_stride_for_bpp(uint8_t bpp, uint32_t width) {
   switch (bpp) {
     case BMF_BPP_MONO:
       return (int)((width + 7) / 8);
+    case BMF_BPP_GRAY4:
+      return (int)((width + 1) / 2);
     case BMF_BPP_GRAY8:
       return (int)width;
     default:
@@ -148,7 +150,7 @@ static bmf_status_t parse_font_view(bmf_font_view_t *view, const uint8_t *data, 
 
   parsed.flags = read_u16_le_bytes(data + 6);
   parsed.bpp = data[8];
-  if (parsed.bpp != BMF_BPP_MONO && parsed.bpp != BMF_BPP_GRAY8) {
+  if (parsed.bpp != BMF_BPP_MONO && parsed.bpp != BMF_BPP_GRAY4 && parsed.bpp != BMF_BPP_GRAY8) {
     return BMF_STATUS_UNSUPPORTED_BPP;
   }
 

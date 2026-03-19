@@ -6,7 +6,14 @@
 
 #define BMF_MAGIC "BMF1"
 #define BMF_VERSION 1
+
+/* Supported bits per pixel values:
+ * - BMF_BPP_MONO (1): 1-bit monochrome, 8 pixels per byte, MSB-first
+ * - BMF_BPP_GRAY4 (4): 4-bit grayscale, 2 pixels per byte, high nibble first
+ * - BMF_BPP_GRAY8 (8): 8-bit grayscale, 1 byte per pixel
+ */
 #define BMF_BPP_MONO 1
+#define BMF_BPP_GRAY4 4
 #define BMF_BPP_GRAY8 8
 
 #define GLYPH_RECORD_SIZE 16
