@@ -1649,16 +1649,6 @@ void app_main(void) {
     return;
   }
 
-#if 0
-  uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
-  for (size_t i = 0; i < 4; i++) {
-    lcd_fill_screen_rgb565(colors[i]);
-    delay_ms(1000);
-  }
-#endif
-
-  puts("LCD smoke test complete");
-
   uint16_t background_color = rgb888_to_rgb565(0, 0, 0);
 
   bmf_font_view_t font_view;
@@ -1730,42 +1720,4 @@ void app_main(void) {
     printf("Failed to render heap info: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
   }
-
-#if 0
-  const uint16_t RECT_X = 40;
-  const uint16_t RECT_Y = 30;
-  const uint16_t RECT_W = 96;
-  const uint16_t RECT_H = 64;
-
-  memset(LCD_BUFFER, 0xFF, lcd_buffer_size);
-
-  for (uint16_t y = 0; y < RECT_H; ++y) {
-    uint16_t draw_y = RECT_Y + y;
-    if (draw_y >= LCD_HEIGHT) {
-      continue;
-    }
-
-    for (uint16_t x = 0; x < RECT_W; ++x) {
-      uint16_t draw_x = RECT_X + x;
-      if (draw_x >= LCD_WIDTH) {
-        continue;
-      }
-
-      int32_t err =
-          lcd_buffer_set_pixel_rgb565(LCD_BUFFER, LCD_WIDTH, LCD_HEIGHT, draw_x, draw_y, 0xF800);
-      if (err != ISPI_ERR_NONE) {
-        printf("Failed setting pixel value: %ld\n", (long)err);
-        release_handles();
-        return;
-      }
-    }
-  }
-
-  err = lcd_write_buffer_chunked(&display, LCD_BUFFER, lcd_buffer_size);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Failed writing buffer: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-#endif
 }
