@@ -59,6 +59,7 @@ typedef struct {
   uint32_t bitmap_data_size;
   const uint8_t *source_data;
   size_t source_size;
+  uint8_t is_sorted;
 } bmf_font_view_t;
 
 typedef struct {
@@ -78,6 +79,7 @@ typedef struct {
   size_t source_size;
   uint8_t owns_source_data;
   uint8_t owns_glyphs;
+  uint8_t is_sorted;
 } bmf_font_t;
 
 void bmf_font_view_init(bmf_font_view_t *view);
@@ -89,6 +91,10 @@ bmf_status_t bmf_font_view_find_glyph(const bmf_font_view_t *view,
                                       uint32_t codepoint,
                                       bmf_glyph_record_t *glyph,
                                       size_t *glyph_index);
+bmf_status_t bmf_font_view_find_glyph_binary(const bmf_font_view_t *view,
+                                             uint32_t codepoint,
+                                             bmf_glyph_record_t *glyph,
+                                             size_t *glyph_index);
 const uint8_t *bmf_font_view_get_glyph_bitmap(const bmf_font_view_t *view,
                                               const bmf_glyph_record_t *glyph,
                                               int *width,
@@ -112,6 +118,7 @@ bmf_font_t *bmf_load(const char *path);
 bmf_font_t *bmf_load_from_memory(const uint8_t *data, size_t size);
 void bmf_free(bmf_font_t *font);
 const bmf_glyph_record_t *bmf_find_glyph(const bmf_font_t *font, uint32_t codepoint);
+const bmf_glyph_record_t *bmf_find_glyph_binary(const bmf_font_t *font, uint32_t codepoint);
 const uint8_t *bmf_get_glyph_bitmap(const bmf_font_t *font,
                                     size_t glyph_index,
                                     int *width,

@@ -55,6 +55,21 @@ static const uint8_t *glyph_record_ptr(const bmf_font_view_t *view, size_t glyph
   return view->source_data + view->glyph_table_offset + glyph_index * GLYPH_RECORD_SIZE;
 }
 
+static int check_glyphs_sorted(const bmf_font_view_t *view) {
+  uint32_t prev_codepoint = 0;
+
+  for (uint16_t i = 0; i < view->glyph_count; i++) {
+    bmf_glyph_record_t glyph;
+    decode_glyph_record_bytes(glyph_record_ptr(view, i), &glyph);
+    if (i > 0 && glyph.codepoint <= prev_codepoint) {
+      return 0;
+    }
+    prev_codepoint = glyph.codepoint;
+  }
+
+  return 1;
+}
+
 static bmf_status_t validate_glyph_record(const bmf_font_view_t *view,
                                           const bmf_glyph_record_t *glyph) {
   uint32_t expected_bitmap_size;
@@ -191,6 +206,8 @@ static bmf_status_t parse_font_view(bmf_font_view_t *view, const uint8_t *data, 
     }
   }
 
+  parsed.is_sorted = (uint8_t)check_glyphs_sorted(&parsed);
+
   *view = parsed;
   return BMF_STATUS_OK;
 }
@@ -209,6 +226,7 @@ static void font_assign_view_metadata(bmf_font_t *font, const bmf_font_view_t *v
   font->bitmap_data = view->source_data + view->bitmap_data_offset;
   font->source_data = view->source_data;
   font->source_size = view->source_size;
+  font->is_sorted = view->is_sorted;
 }
 
 static bmf_status_t decode_all_glyphs(const bmf_font_view_t *view,
@@ -304,6 +322,54 @@ bmf_status_t bmf_font_view_find_glyph(const bmf_font_view_t *view,
         *glyph_index = i;
       }
       return BMF_STATUS_OK;
+    }
+  }
+
+  return BMF_STATUS_NOT_FOUND;
+}
+
+bmf_status_t bmf_font_view_find_glyph_binary(const bmf_font_view_t *view,
+                                             uint32_t codepoint,
+                                             bmf_glyph_record_t *glyph,
+                                             size_t *glyph_index) {
+  bmf_glyph_record_t decoded;
+  uint16_t low, high, mid;
+
+  if (!view) {
+    return BMF_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (view->glyph_count == 0) {
+    return BMF_STATUS_NOT_FOUND;
+  }
+
+  if (!view->is_sorted) {
+    return bmf_font_view_find_glyph(view, codepoint, glyph, glyph_index);
+  }
+
+  low = 0;
+  high = (uint16_t)(view->glyph_count - 1);
+
+  while (low <= high) {
+    mid = (uint16_t)(low + (high - low) / 2);
+    bmf_status_t status = bmf_font_view_get_glyph(view, mid, &decoded);
+    if (status != BMF_STATUS_OK) {
+      return status;
+    }
+    if (decoded.codepoint == codepoint) {
+      if (glyph) {
+        *glyph = decoded;
+      }
+      if (glyph_index) {
+        *glyph_index = mid;
+      }
+      return BMF_STATUS_OK;
+    }
+    if (codepoint < decoded.codepoint) {
+      if (mid == 0) break;
+      high = (uint16_t)(mid - 1);
+    } else {
+      low = (uint16_t)(mid + 1);
     }
   }
 
@@ -631,6 +697,42 @@ const bmf_glyph_record_t *bmf_find_glyph(const bmf_font_t *font, uint32_t codepo
   for (uint16_t i = 0; i < font->glyph_count; i++) {
     if (font->glyphs[i].codepoint == codepoint) {
       return &font->glyphs[i];
+    }
+  }
+
+  return NULL;
+}
+
+const bmf_glyph_record_t *bmf_find_glyph_binary(const bmf_font_t *font, uint32_t codepoint) {
+  uint16_t low, high, mid;
+  uint32_t mid_codepoint;
+
+  if (!font || !font->glyphs) {
+    return NULL;
+  }
+
+  if (font->glyph_count == 0) {
+    return NULL;
+  }
+
+  if (!font->is_sorted) {
+    return bmf_find_glyph(font, codepoint);
+  }
+
+  low = 0;
+  high = (uint16_t)(font->glyph_count - 1);
+
+  while (low <= high) {
+    mid = (uint16_t)(low + (high - low) / 2);
+    mid_codepoint = font->glyphs[mid].codepoint;
+    if (mid_codepoint == codepoint) {
+      return &font->glyphs[mid];
+    }
+    if (codepoint < mid_codepoint) {
+      if (mid == 0) break;
+      high = (uint16_t)(mid - 1);
+    } else {
+      low = (uint16_t)(mid + 1);
     }
   }
 
