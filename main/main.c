@@ -58,6 +58,14 @@ typedef struct {
   int stride;
 } lcd_prepared_glyph_t;
 
+typedef struct rect_area rect_area_t;
+struct rect_area {
+  int16_t x0;
+  int16_t y0;
+  int16_t x1;
+  int16_t y1;
+};
+
 static int32_t lcd_write_buffer_chunked(ili9342_t *display, const uint8_t *buffer, size_t len);
 
 static const char *bool_to_yes_no(bool value) {
@@ -238,11 +246,25 @@ static int32_t lcd_fill_screen(ili9342_t *display, uint16_t color) {
   return ILI9342_ERR_NONE;
 }
 
+static bool rect_area_is_valid_for_lcd(const rect_area_t *area) {
+  if (area == NULL) {
+    return false;
+  }
+
+  return area->x0 >= 0 && area->y0 >= 0 && area->x1 >= area->x0 && area->y1 >= area->y0 &&
+         area->x1 < LCD_WIDTH && area->y1 < LCD_HEIGHT;
+}
+
 static int32_t lcd_clear_text_line(ili9342_t *display,
                                    const bmf_font_view_t *font,
+                                   const rect_area_t *bounding,
                                    int16_t baseline_y,
                                    uint16_t background_color) {
-  if (display == NULL || font == NULL) {
+  if (display == NULL || font == NULL || bounding == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  if (!rect_area_is_valid_for_lcd(bounding)) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
@@ -260,23 +282,27 @@ static int32_t lcd_clear_text_line(ili9342_t *display,
     line_y1 = line_y0 + (int32_t)font->line_height - 1;
   }
 
-  if (line_y1 < 0 || line_y0 >= LCD_HEIGHT) {
+  if (line_y1 < bounding->y0 || line_y0 > bounding->y1) {
     return ILI9342_ERR_NONE;
   }
 
-  if (line_y0 < 0) {
-    line_y0 = 0;
+  if (line_y0 < bounding->y0) {
+    line_y0 = bounding->y0;
   }
-  if (line_y1 >= LCD_HEIGHT) {
-    line_y1 = LCD_HEIGHT - 1;
+  if (line_y1 > bounding->y1) {
+    line_y1 = bounding->y1;
+  }
+  if (line_y0 > line_y1) {
+    return ILI9342_ERR_NONE;
   }
 
-  return lcd_fill_rect(display,
-                       0U,
-                       (uint16_t)line_y0,
-                       LCD_WIDTH - 1U,
-                       (uint16_t)line_y1,
-                       background_color);
+  return lcd_fill_rect(
+      display,
+      (uint16_t)bounding->x0,
+      (uint16_t)line_y0,
+      (uint16_t)bounding->x1,
+      (uint16_t)line_y1,
+      background_color);
 }
 
 inline uint8_t n_to_m_bits(uint8_t data, uint8_t n, uint8_t m) {
@@ -619,25 +645,45 @@ static int32_t lcd_putc_wrap(ili9342_t *display,
                              char c,
                              int16_t x,
                              int16_t y,
+                             const rect_area_t *bounding,
                              uint16_t foreground_color,
                              uint16_t background_color,
                              int16_t *next_x,
                              int16_t *next_y) {
-  if (display == NULL || font == NULL) {
+  if (display == NULL || font == NULL || bounding == NULL) {
     return ILI9342_ERR_INVALID_ARG;
+  }
+
+  if (!rect_area_is_valid_for_lcd(bounding)) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int16_t first_line_y = bounding->y0;
+  if (font->ascent > 0) {
+    first_line_y = (int16_t)(bounding->y0 + font->ascent);
+  } else if (font->line_height > 0U) {
+    first_line_y = (int16_t)(bounding->y0 + (int16_t)font->line_height - 1);
+  }
+  if (first_line_y > bounding->y1) {
+    first_line_y = bounding->y1;
   }
 
   int16_t pen_x = x;
   int16_t pen_y = y;
-  int16_t first_line_y = font->line_height > 0 ? font->line_height : 0;
+  if (pen_x < bounding->x0 || pen_x > bounding->x1) {
+    pen_x = bounding->x0;
+  }
+  if (pen_y < first_line_y || pen_y > bounding->y1) {
+    pen_y = first_line_y;
+  }
 
   if (c == '\n') {
-    pen_x = 0;
+    pen_x = bounding->x0;
     pen_y = (int16_t)(pen_y + font->line_height);
-    if (pen_y >= LCD_HEIGHT) {
+    if (pen_y > bounding->y1) {
       pen_y = first_line_y;
     }
-    int32_t err = lcd_clear_text_line(display, font, pen_y, background_color);
+    int32_t err = lcd_clear_text_line(display, font, bounding, pen_y, background_color);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }
@@ -668,13 +714,13 @@ static int32_t lcd_putc_wrap(ili9342_t *display,
     int32_t draw_x1 = draw_x + glyph_width - 1;
     int32_t draw_y1 = draw_y + glyph_height - 1;
 
-    if (draw_x1 >= LCD_WIDTH && pen_x > 0) {
-      pen_x = 0;
+    if (draw_x1 > bounding->x1 && pen_x > bounding->x0) {
+      pen_x = bounding->x0;
       pen_y = (int16_t)(pen_y + font->line_height);
-      if (pen_y >= LCD_HEIGHT) {
+      if (pen_y > bounding->y1) {
         pen_y = first_line_y;
       }
-      int32_t err = lcd_clear_text_line(display, font, pen_y, background_color);
+      int32_t err = lcd_clear_text_line(display, font, bounding, pen_y, background_color);
       if (err != ILI9342_ERR_NONE) {
         return err;
       }
@@ -684,10 +730,10 @@ static int32_t lcd_putc_wrap(ili9342_t *display,
       draw_y1 = draw_y + glyph_height - 1;
     }
 
-    if (draw_y1 >= LCD_HEIGHT) {
+    if (draw_y1 > bounding->y1) {
       pen_y = first_line_y;
-      pen_x = 0;
-      int32_t err = lcd_clear_text_line(display, font, pen_y, background_color);
+      pen_x = bounding->x0;
+      int32_t err = lcd_clear_text_line(display, font, bounding, pen_y, background_color);
       if (err != ILI9342_ERR_NONE) {
         return err;
       }
@@ -697,10 +743,10 @@ static int32_t lcd_putc_wrap(ili9342_t *display,
       draw_y1 = draw_y + glyph_height - 1;
     }
 
-    int32_t clip_x0 = draw_x < 0 ? 0 : draw_x;
-    int32_t clip_y0 = draw_y < 0 ? 0 : draw_y;
-    int32_t clip_x1 = draw_x1 >= LCD_WIDTH ? LCD_WIDTH - 1 : draw_x1;
-    int32_t clip_y1 = draw_y1 >= LCD_HEIGHT ? LCD_HEIGHT - 1 : draw_y1;
+    int32_t clip_x0 = draw_x < bounding->x0 ? bounding->x0 : draw_x;
+    int32_t clip_y0 = draw_y < bounding->y0 ? bounding->y0 : draw_y;
+    int32_t clip_x1 = draw_x1 > bounding->x1 ? bounding->x1 : draw_x1;
+    int32_t clip_y1 = draw_y1 > bounding->y1 ? bounding->y1 : draw_y1;
 
     if (clip_x0 <= clip_x1 && clip_y0 <= clip_y1) {
       int32_t err = ili9342_address_window_set(display, clip_x0, clip_y0, clip_x1, clip_y1);
@@ -778,13 +824,13 @@ static int32_t lcd_putc_wrap(ili9342_t *display,
 
   int32_t cursor_x = (int32_t)pen_x + glyph.x_advance;
   int32_t cursor_y = pen_y;
-  if (cursor_x >= LCD_WIDTH) {
-    cursor_x = 0;
+  if (cursor_x > bounding->x1) {
+    cursor_x = bounding->x0;
     cursor_y += font->line_height;
-    if (cursor_y >= LCD_HEIGHT) {
+    if (cursor_y > bounding->y1) {
       cursor_y = first_line_y;
     }
-    int32_t err = lcd_clear_text_line(display, font, (int16_t)cursor_y, background_color);
+    int32_t err = lcd_clear_text_line(display, font, bounding, (int16_t)cursor_y, background_color);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }
@@ -1319,12 +1365,32 @@ void app_main(void) {
       "overflow the Y axis too! How's that?";
 
   int16_t x = 5;
-  int16_t y = 30;
+
+  rect_area_t bounding = {
+      .x0 = 0,
+      .y0 = 64,
+      .x1 = LCD_WIDTH - 1,
+      .y1 = LCD_HEIGHT - 1,
+  };
+  int16_t y = bounding.y0;
+  if (font_view.ascent > 0) {
+    y = (int16_t)(bounding.y0 + font_view.ascent);
+  } else if (font_view.line_height > 0U) {
+    y = (int16_t)(bounding.y0 + (int16_t)font_view.line_height - 1);
+  }
   for (size_t i = 0; i < strlen(msg2); i++) {
     int16_t next_x = x;
     int16_t next_y = y;
-    err = lcd_putc_wrap(
-        &display, &font_view, msg2[i], x, y, foreground_color, background_color, &next_x, &next_y);
+    err = lcd_putc_wrap(&display,
+                        &font_view,
+                        msg2[i],
+                        x,
+                        y,
+                        &bounding,
+                        foreground_color,
+                        background_color,
+                        &next_x,
+                        &next_y);
     if (err != ILI9342_ERR_NONE) {
       printf("Failed to render wrapped character '%c': %ld\n", msg2[i], (long)err);
       release_handles();
