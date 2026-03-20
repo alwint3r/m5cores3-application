@@ -58,15 +58,6 @@ typedef struct {
   int stride;
 } lcd_prepared_glyph_t;
 
-typedef struct {
-  int64_t prepare_us;
-  int64_t stream_us;
-  int64_t total_us;
-  size_t visible_glyph_count;
-  size_t row_bytes;
-  size_t row_count;
-} lcd_render_stats_t;
-
 static int32_t lcd_write_buffer_chunked(ili9342_t *display, const uint8_t *buffer, size_t len);
 
 static const char *bool_to_yes_no(bool value) {
@@ -245,6 +236,47 @@ static int32_t lcd_fill_screen(ili9342_t *display, uint16_t color) {
 
   puts("LCD display memory fill complete");
   return ILI9342_ERR_NONE;
+}
+
+static int32_t lcd_clear_text_line(ili9342_t *display,
+                                   const bmf_font_view_t *font,
+                                   int16_t baseline_y,
+                                   uint16_t background_color) {
+  if (display == NULL || font == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int32_t line_y0 = 0;
+  if (font->ascent > 0) {
+    line_y0 = (int32_t)baseline_y - font->ascent;
+  } else if (font->line_height > 0U) {
+    line_y0 = (int32_t)baseline_y - (int32_t)font->line_height + 1;
+  } else {
+    line_y0 = baseline_y;
+  }
+
+  int32_t line_y1 = line_y0;
+  if (font->line_height > 0U) {
+    line_y1 = line_y0 + (int32_t)font->line_height - 1;
+  }
+
+  if (line_y1 < 0 || line_y0 >= LCD_HEIGHT) {
+    return ILI9342_ERR_NONE;
+  }
+
+  if (line_y0 < 0) {
+    line_y0 = 0;
+  }
+  if (line_y1 >= LCD_HEIGHT) {
+    line_y1 = LCD_HEIGHT - 1;
+  }
+
+  return lcd_fill_rect(display,
+                       0U,
+                       (uint16_t)line_y0,
+                       LCD_WIDTH - 1U,
+                       (uint16_t)line_y1,
+                       background_color);
 }
 
 inline uint8_t n_to_m_bits(uint8_t data, uint8_t n, uint8_t m) {
@@ -458,15 +490,10 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
                                        uint16_t background_color,
                                        uint16_t foreground_color,
                                        bmf_font_view_t *font_view,
-                                       ili9342_t *display,
-                                       lcd_render_stats_t *stats) {
+                                       ili9342_t *display) {
   if (display == NULL || text == NULL || font_view == NULL || screen_width == 0U ||
       screen_height == 0U || screen_width > LCD_WIDTH) {
     return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (stats != NULL) {
-    memset(stats, 0, sizeof(*stats));
   }
 
   size_t text_length = strlen(text);
@@ -479,13 +506,11 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
     return ILI9342_ERR_NO_MEM;
   }
 
-  int64_t total_start = esp_timer_get_time();
   int text_clip_x0 = 0;
   int text_clip_y0 = 0;
   int text_clip_x1 = 0;
   int text_clip_y1 = 0;
   size_t visible_glyph_count = 0U;
-  int64_t prepare_start = esp_timer_get_time();
   int32_t err = lcd_prepare_glyph_run(screen_width,
                                       screen_height,
                                       text,
@@ -499,34 +524,20 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
                                       &text_clip_y0,
                                       &text_clip_x1,
                                       &text_clip_y1);
-  int64_t prepare_us = esp_timer_get_time() - prepare_start;
   if (err != ILI9342_ERR_NONE) {
     free(prepared_glyphs);
     return err;
   }
 
-  if (stats != NULL) {
-    stats->prepare_us = prepare_us;
-    stats->visible_glyph_count = visible_glyph_count;
-  }
-
   if (visible_glyph_count == 0U) {
-    if (stats != NULL) {
-      stats->total_us = esp_timer_get_time() - total_start;
-    }
     free(prepared_glyphs);
     return ISPI_ERR_NONE;
   }
 
   size_t row_pixels = (size_t)(text_clip_x1 - text_clip_x0 + 1);
   size_t row_bytes = row_pixels * 2U;
-  size_t row_count = (size_t)(text_clip_y1 - text_clip_y0 + 1);
   uint8_t background_hi = (uint8_t)(background_color >> 8);
   uint8_t background_lo = (uint8_t)(background_color & 0xFF);
-  if (stats != NULL) {
-    stats->row_bytes = row_bytes;
-    stats->row_count = row_count;
-  }
 
   err = ili9342_address_window_set(display,
                                    (uint16_t)text_clip_x0,
@@ -538,7 +549,6 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
     return err;
   }
 
-  int64_t stream_start = esp_timer_get_time();
   for (int dst_y = text_clip_y0; dst_y <= text_clip_y1; dst_y++) {
     for (size_t row_offset = 0; row_offset < row_bytes; row_offset += 2U) {
       LCD_ROW_BUFFER[row_offset + 0U] = background_hi;
@@ -600,13 +610,193 @@ static int32_t lcd_render_c_str_direct(uint16_t screen_width,
     }
   }
 
-  if (stats != NULL) {
-    stats->stream_us = esp_timer_get_time() - stream_start;
-    stats->total_us = esp_timer_get_time() - total_start;
-  }
-
   free(prepared_glyphs);
   return ISPI_ERR_NONE;
+}
+
+static int32_t lcd_putc_wrap(ili9342_t *display,
+                             bmf_font_view_t *font,
+                             char c,
+                             int16_t x,
+                             int16_t y,
+                             uint16_t foreground_color,
+                             uint16_t background_color,
+                             int16_t *next_x,
+                             int16_t *next_y) {
+  if (display == NULL || font == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int16_t pen_x = x;
+  int16_t pen_y = y;
+  int16_t first_line_y = font->line_height > 0 ? font->line_height : 0;
+
+  if (c == '\n') {
+    pen_x = 0;
+    pen_y = (int16_t)(pen_y + font->line_height);
+    if (pen_y >= LCD_HEIGHT) {
+      pen_y = first_line_y;
+    }
+    int32_t err = lcd_clear_text_line(display, font, pen_y, background_color);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+    if (next_x != NULL) {
+      *next_x = pen_x;
+    }
+    if (next_y != NULL) {
+      *next_y = pen_y;
+    }
+    return ILI9342_ERR_NONE;
+  }
+
+  uint32_t codepoint = (uint32_t)c;
+  bmf_glyph_record_t glyph;
+  bmf_status_t bmf_ret = bmf_font_view_find_glyph(font, codepoint, &glyph, NULL);
+  if (bmf_ret != BMF_STATUS_OK) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int glyph_width = 0;
+  int glyph_height = 0;
+  const uint8_t *bitmap = bmf_font_view_get_glyph_bitmap(font, &glyph, &glyph_width, &glyph_height);
+  bool has_bitmap = bitmap != NULL && glyph_width > 0 && glyph_height > 0;
+
+  if (has_bitmap) {
+    int32_t draw_x = (int32_t)pen_x + glyph.x_offset;
+    int32_t draw_y = (int32_t)pen_y + glyph.y_offset;
+    int32_t draw_x1 = draw_x + glyph_width - 1;
+    int32_t draw_y1 = draw_y + glyph_height - 1;
+
+    if (draw_x1 >= LCD_WIDTH && pen_x > 0) {
+      pen_x = 0;
+      pen_y = (int16_t)(pen_y + font->line_height);
+      if (pen_y >= LCD_HEIGHT) {
+        pen_y = first_line_y;
+      }
+      int32_t err = lcd_clear_text_line(display, font, pen_y, background_color);
+      if (err != ILI9342_ERR_NONE) {
+        return err;
+      }
+      draw_x = (int32_t)pen_x + glyph.x_offset;
+      draw_y = (int32_t)pen_y + glyph.y_offset;
+      draw_x1 = draw_x + glyph_width - 1;
+      draw_y1 = draw_y + glyph_height - 1;
+    }
+
+    if (draw_y1 >= LCD_HEIGHT) {
+      pen_y = first_line_y;
+      pen_x = 0;
+      int32_t err = lcd_clear_text_line(display, font, pen_y, background_color);
+      if (err != ILI9342_ERR_NONE) {
+        return err;
+      }
+      draw_x = (int32_t)pen_x + glyph.x_offset;
+      draw_y = (int32_t)pen_y + glyph.y_offset;
+      draw_x1 = draw_x + glyph_width - 1;
+      draw_y1 = draw_y + glyph_height - 1;
+    }
+
+    int32_t clip_x0 = draw_x < 0 ? 0 : draw_x;
+    int32_t clip_y0 = draw_y < 0 ? 0 : draw_y;
+    int32_t clip_x1 = draw_x1 >= LCD_WIDTH ? LCD_WIDTH - 1 : draw_x1;
+    int32_t clip_y1 = draw_y1 >= LCD_HEIGHT ? LCD_HEIGHT - 1 : draw_y1;
+
+    if (clip_x0 <= clip_x1 && clip_y0 <= clip_y1) {
+      int32_t err = ili9342_address_window_set(display, clip_x0, clip_y0, clip_x1, clip_y1);
+      if (err != ILI9342_ERR_NONE) {
+        return err;
+      }
+
+      for (int32_t dst_y = clip_y0; dst_y <= clip_y1; dst_y++) {
+        for (int32_t dst_x = clip_x0; dst_x <= clip_x1; dst_x++) {
+          int32_t gx = dst_x - draw_x;
+          int32_t gy = dst_y - draw_y;
+          if (font->bpp == BMF_BPP_MONO) {
+            int stride = (int)((glyph_width + 7) / 8);
+            int byte_idx = (int)(gy * stride + gx / 8);
+            int bit_idx = 7 - (int)(gx % 8);
+            uint8_t byte = bitmap[byte_idx];
+            if (((byte >> bit_idx) & 1U) != 0U) {
+              uint8_t data[2] = {
+                  (uint8_t)(foreground_color >> 8),
+                  (uint8_t)(foreground_color & 0xFF),
+              };
+              err = lcd_write_data(data, sizeof(data));
+              if (err != ISPI_ERR_NONE) {
+                return err;
+              }
+            } else {
+              err = lcd_write_data((uint8_t[2]){background_color >> 8, background_color & 0xFF}, 2);
+              if (err != ISPI_ERR_NONE) {
+                return err;
+              }
+            }
+          } else if (font->bpp == BMF_BPP_GRAY4) {
+            int stride = (int)((glyph_width + 1) / 2);
+            int byte_idx = (int)(gy * stride + gx / 2);
+            uint8_t byte = bitmap[byte_idx];
+            uint8_t coverage = (gx % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
+            coverage = (coverage << 4) | coverage;
+            if (coverage != 0U) {
+              uint16_t color = blend_rgb565(background_color, foreground_color, coverage);
+              uint8_t data[2] = {(uint8_t)(color >> 8), (uint8_t)(color & 0xFF)};
+              err = lcd_write_data(data, sizeof(data));
+              if (err != ISPI_ERR_NONE) {
+                return err;
+              }
+            } else {
+              err = lcd_write_data((uint8_t[2]){background_color >> 8, background_color & 0xFF}, 2);
+              if (err != ISPI_ERR_NONE) {
+                return err;
+              }
+            }
+          } else if (font->bpp == BMF_BPP_GRAY8) {
+            int stride = glyph_width;
+            int byte_idx = (int)(gy * stride + gx);
+            uint8_t coverage = bitmap[byte_idx];
+            if (coverage != 0U) {
+              uint16_t color = blend_rgb565(background_color, foreground_color, coverage);
+              uint8_t data[2] = {(uint8_t)(color >> 8), (uint8_t)(color & 0xFF)};
+              err = lcd_write_data(data, sizeof(data));
+              if (err != ISPI_ERR_NONE) {
+                return err;
+              }
+            } else {
+              err = lcd_write_data((uint8_t[2]){background_color >> 8, background_color & 0xFF}, 2);
+              if (err != ISPI_ERR_NONE) {
+                return err;
+              }
+            }
+          } else {
+            return ILI9342_ERR_INVALID_ARG;
+          }
+        }
+      }
+    }
+  }
+
+  int32_t cursor_x = (int32_t)pen_x + glyph.x_advance;
+  int32_t cursor_y = pen_y;
+  if (cursor_x >= LCD_WIDTH) {
+    cursor_x = 0;
+    cursor_y += font->line_height;
+    if (cursor_y >= LCD_HEIGHT) {
+      cursor_y = first_line_y;
+    }
+    int32_t err = lcd_clear_text_line(display, font, (int16_t)cursor_y, background_color);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+  }
+
+  if (next_x != NULL) {
+    *next_x = (int16_t)cursor_x;
+  }
+  if (next_y != NULL) {
+    *next_y = (int16_t)cursor_y;
+  }
+  return ILI9342_ERR_NONE;
 }
 
 static int32_t create_i2c_bus(void) {
@@ -1104,7 +1294,6 @@ void app_main(void) {
 
   puts("LCD smoke test complete");
 
-  const char *msg = "jet me up face & at";
   uint16_t background_color = rgb888_to_rgb565(0, 0, 0);
 
   bmf_font_view_t font_view;
@@ -1116,46 +1305,34 @@ void app_main(void) {
     release_handles();
     return;
   }
-
-  int64_t fill_start = esp_timer_get_time();
   err = lcd_fill_screen(&display, background_color);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to fill the LCD background: %ld\n", (long)err);
     release_handles();
     return;
   }
-  int64_t fill_dur = esp_timer_get_time() - fill_start;
-  printf("Fill duration: %lld ms\n", fill_dur / 1000);
-  int64_t start = esp_timer_get_time();
+
   uint16_t foreground_color = 0xFFFF;
-  lcd_render_stats_t render_stats = {0};
-  err = lcd_render_c_str_direct(LCD_WIDTH,
-                                LCD_HEIGHT,
-                                msg,
-                                2,
-                                33,
-                                background_color,
-                                foreground_color,
-                                &font_view,
-                                &display,
-                                &render_stats);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Failed to render string directly to the LCD: %ld\n", (long)err);
-    release_handles();
-    return;
+  const char *msg2 =
+      "Hello world! This text may overflow on the x axis.\nAlso, this is actually a new line! Will "
+      "this overflow too? Ah great! Then, how about this?\nI'm at the new line and I'm about to "
+      "overflow the Y axis too! How's that?";
+
+  int16_t x = 5;
+  int16_t y = 30;
+  for (size_t i = 0; i < strlen(msg2); i++) {
+    int16_t next_x = x;
+    int16_t next_y = y;
+    err = lcd_putc_wrap(
+        &display, &font_view, msg2[i], x, y, foreground_color, background_color, &next_x, &next_y);
+    if (err != ILI9342_ERR_NONE) {
+      printf("Failed to render wrapped character '%c': %ld\n", msg2[i], (long)err);
+      release_handles();
+      return;
+    }
+    x = next_x;
+    y = next_y;
   }
-
-  int64_t dur = esp_timer_get_time() - start;
-  printf("Render duration: %lld ms\n", dur / 1000);
-  printf(
-      "Render breakdown: prepare=%lld us, stream=%lld us, visible_glyphs=%u, rows=%u, "
-      "row_bytes=%u\n",
-      render_stats.prepare_us,
-      render_stats.stream_us,
-      (unsigned)render_stats.visible_glyph_count,
-      (unsigned)render_stats.row_count,
-      (unsigned)render_stats.row_bytes);
-
 #if 0
   const uint16_t RECT_X = 40;
   const uint16_t RECT_Y = 30;
