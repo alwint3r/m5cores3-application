@@ -1812,12 +1812,14 @@ void app_main(void) {
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     uint8_t input_value = 0;
-    err = aw9523b_reg8_read(
-        aw9523b, AW9523B_REG_INPUT0 + CORES3_AW9523B_TOUCH_INT_PORT, &input_value);
+
+    err = aw9523b_port_input_read(aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, &input_value);
     if (err != II2C_ERR_NONE) {
       printf("Failed to read AW9523B register for PORT1 input data: %s\n", ii2c_err_to_name(err));
       continue;
     }
+
+    (void)input_value;
 
     printf("Touch INT is propagated!\n");
   }
