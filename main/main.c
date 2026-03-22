@@ -8,6 +8,7 @@
 #include <aw9523b/aw9523b_register.h>
 #include <axp2101/axp2101.h>
 #include <axp2101/axp2101_register.h>
+#include <ft6x36/ft6x36.h>
 #include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
 #include <ili9342/ili9342.h>
@@ -40,6 +41,7 @@ static uint8_t LCD_ROW_BUFFER[320 * 2] = {0};
 
 static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
+static const uint16_t CORES3_FT6336_I2C_ADDRESS = 0x38;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PORT = 1;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
 static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
@@ -57,7 +59,9 @@ static ii2c_device_handle_t aw9523b = NULL;
 static ii2c_device_handle_t axp2101 = NULL;
 static ispi_master_bus_handle_t lcd_spi = NULL;
 static ispi_device_handle_t lcd = NULL;
+static ii2c_device_handle_t ft6336_i2c = NULL;
 static bool lcd_dc_gpio_configured = false;
+static ft6x36_t ft6336;
 
 typedef struct {
   const uint8_t *bitmap;
@@ -81,6 +85,14 @@ static int32_t lcd_write_buffer_chunked(ili9342_t *display, const uint8_t *buffe
 
 static const char *bool_to_yes_no(bool value) {
   return value ? "yes" : "no";
+}
+
+static const char *touch_err_to_name(int32_t err) {
+  if (err >= FT6X36_ERR_BASE && err < (FT6X36_ERR_BASE + 0x100)) {
+    return ft6x36_err_to_name(err);
+  }
+
+  return ii2c_err_to_name(err);
 }
 
 static const char *axp2101_charging_status_to_string(axp2101_charging_status_t status) {
@@ -118,6 +130,11 @@ static void release_handles(void) {
   if (axp2101 != NULL) {
     (void)ii2c_del_device(axp2101);
     axp2101 = NULL;
+  }
+
+  if (ft6336_i2c != NULL) {
+    (void)ii2c_del_device(ft6336_i2c);
+    ft6336_i2c = NULL;
   }
 
   if (sys_i2c != NULL) {
@@ -1520,6 +1537,29 @@ static void IRAM_ATTR host_gpio_intr_handler(void *arg) {
   }
 }
 
+static int32_t ft6336_i2c_write(const uint8_t *write_buffer, size_t write_size) {
+  return ii2c_master_transmit(ft6336_i2c, write_buffer, write_size);
+}
+
+static int32_t ft6336_i2c_write_read(const uint8_t *write_buffer,
+                                     size_t write_size,
+                                     uint8_t *read_buffer,
+                                     size_t *read_size,
+                                     size_t read_capacity) {
+  if (!read_buffer || !read_size) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  int32_t err = ii2c_master_transmit_receive(
+      ft6336_i2c, write_buffer, write_size, read_buffer, read_capacity);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  *read_size = read_capacity;
+  return II2C_ERR_NONE;
+}
+
 static int32_t configure_touch_screen(void) {
   int32_t err = aw9523b_port_dir_set(aw9523b,
                                      CORES3_AW9523B_TOUCH_INT_PORT,
@@ -1556,13 +1596,36 @@ static int32_t configure_touch_screen(void) {
     return err;
   }
 
-  return II2C_ERR_NONE;
+  if (ft6336_i2c == NULL) {
+    err = attach_i2c_device(CORES3_FT6336_I2C_ADDRESS, &ft6336_i2c);
+    if (err != II2C_ERR_NONE) {
+      return err;
+    }
+  }
+
+  ft6336.transport_write = ft6336_i2c_write;
+  ft6336.transport_write_read = ft6336_i2c_write_read;
+
+  uint8_t touch_fwver = 0;
+  err = ft6x36_firmware_version_get(&ft6336, &touch_fwver);
+  if (err != FT6X36_ERR_NONE) {
+    return err;
+  }
+
+  printf("FT6x36 firmware version: %u\n", touch_fwver);
+
+  err = ft6x36_interrupt_mode_set(&ft6336, FT6X36_INTERRUPT_MODE_TRIGGER);
+  if (err != FT6X36_ERR_NONE) {
+    return err;
+  }
+
+  return FT6X36_ERR_NONE;
 }
 
 static int32_t configure_io_extender_interrupt(void) {
   igpio_config_t config;
   igpio_get_default_config(&config);
-  config.intr_type = IGPIO_INTR_NEGEDGE;
+  config.intr_type = IGPIO_INTR_ANYEDGE;
   config.io_num = CORES3_I2C_INT_PIN;
   config.mode = IGPIO_MODE_INPUT;
   config.pull_mode = IGPIO_PULL_UP;
@@ -1682,7 +1745,7 @@ void app_main(void) {
 
   err = configure_touch_screen();
   if (err != 0) {
-    printf("Failed to configure the touch screen: %s (%ld)\n", ii2c_err_to_name(err), (long)err);
+    printf("Failed to configure the touch screen: %s (%ld)\n", touch_err_to_name(err), (long)err);
     release_handles();
     return;
   }
@@ -1848,5 +1911,23 @@ void app_main(void) {
 
     (void)input_value;
     ESP_LOGI("TOUCH", "Touch INT is propagated!");
+    ft6x36_touch_data_t out_touch;
+    err = ft6x36_touch_data_get(&ft6336, &out_touch);
+    if (err != FT6X36_ERR_NONE) {
+      printf("Failed to read the touch data: %s (%ld)", ft6x36_err_to_name(err), (long)err);
+    } else {
+      ESP_LOGI("TOUCH", "Touch count = %u", out_touch.touch_count);
+			ESP_LOGI("TOUCH", "Gesture ID: %u", out_touch.gesture_id);
+      for (uint8_t count = 0; count < out_touch.touch_count; count++) {
+        ESP_LOGI("TOUCH",
+                 "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u\n",
+                 count,
+                 out_touch.points[count].x,
+                 out_touch.points[count].y,
+                 out_touch.points[count].area,
+                 out_touch.points[count].weight,
+                 (uint8_t)out_touch.points[count].event);
+      }
+    }
   }
 }

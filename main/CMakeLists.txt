@@ -7,6 +7,7 @@ idf_component_register(
 	ii2c
 	axp2101
 	aw9523b
+	ft6x36
 	ispi
 	igpio
 	ili9342
