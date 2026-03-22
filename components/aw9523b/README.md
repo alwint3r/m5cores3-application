@@ -1,6 +1,6 @@
 # aw9523b
 
-`aw9523b` is a small helper component for the AW9523B I2C GPIO expander used in this repository. It builds on top of `ii2c` and currently exposes chip identification, port-0 drive-mode control, whole-port direction and interrupt masks, single-pin direction and interrupt helpers, single-pin level I/O helpers, and low-level 8-bit register access for cases that do not yet have a dedicated wrapper.
+`aw9523b` is a small helper component for the AW9523B I2C GPIO expander used in this repository. It builds on top of `ii2c` and currently exposes chip identification, port-0 drive-mode control, whole-port direction and interrupt masks, whole-port input and output reads, single-pin direction and interrupt helpers, single-pin level I/O helpers, and low-level 8-bit register access for cases that do not yet have a dedicated wrapper.
 
 ## Public Files
 
@@ -32,6 +32,8 @@ Main entry points:
 - `aw9523b_port_dir_set()` changes the direction of a single pin with an explicit direction enum instead of a boolean flag.
 - `aw9523b_port_interrupt_bits_get()`, `aw9523b_port_interrupt_bits_set()`, and `aw9523b_port_interrupt_bits_update()` read or write an entire 8-bit interrupt-enable mask using positive enable semantics.
 - `aw9523b_interrupt_get()` and `aw9523b_interrupt_set()` read or write interrupt enable state for one pin.
+- `aw9523b_port_input_read()` reads the full 8-bit input-state register for one port.
+- `aw9523b_port_output_read()` reads the full 8-bit output-latch register for one port.
 - `aw9523b_level_get()` reads the current logic level of one pin from the input register.
 - `aw9523b_level_set()` writes one pin in the output latch register.
 - `aw9523b_reg8_read()`, `aw9523b_reg8_write()`, `aw9523b_reg8_set_bits()`, and `aw9523b_reg8_update_bits()` provide low-level direct register access when no higher-level helper exists yet.
@@ -130,5 +132,6 @@ int example_aw9523b_enable_interrupt(ii2c_device_handle_t aw9523b) {
 - `aw9523b_port_dir_set()` exposes that same convention through `AW9523B_PORT_DIRECTION_INPUT` and `AW9523B_PORT_DIRECTION_OUTPUT`, so call sites do not need boolean literals.
 - `aw9523b_port_interrupt_bits_*()` and `aw9523b_interrupt_*()` expose positive enable semantics even though the raw interrupt-enable register stores the inverse bit value.
 - `aw9523b_port0_drive_mode_*()` affects only port 0. The current public component does not expose a configurable drive-mode API for port 1.
+- `aw9523b_port_input_read()` and `aw9523b_port_output_read()` expose raw 8-bit port snapshots for callers that need whole-port state instead of per-pin helpers.
 - `aw9523b_level_set()` writes the output latch register, while `aw9523b_level_get()` reads the input-state register.
 - `aw9523b_reg8_set_bits()` and `aw9523b_reg8_update_bits()` both perform read-modify-write cycles, so they preserve unrelated bits in the target register.

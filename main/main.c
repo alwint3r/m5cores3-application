@@ -5,12 +5,14 @@
 #include <string.h>
 
 #include <aw9523b/aw9523b.h>
+#include <aw9523b/aw9523b_register.h>
 #include <axp2101/axp2101.h>
 #include <axp2101/axp2101_register.h>
 #include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
 #include <ili9342/ili9342.h>
 #include <ispi/ispi.h>
+#include <driver/gpio.h>
 #include "open_sans_regular_32_4bpp.h"
 #include "open_sans_regular_16_4bpp.h"
 #include "bmf_reader.h"
@@ -42,6 +44,10 @@ static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
 static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
 static const uint8_t CORES3_AW9523B_LCD_RST_PORT = 1;
 static const uint8_t CORES3_AW9523B_LCD_RST_PIN = 1;
+
+static const uint8_t CORES3_AW9523B_TOUCH_INT_PORT = 1;
+static const uint8_t CORES3_AW9523B_TOUCH_INT_PIN = 2;
+static const int CORES3_I2C_INT_PIN = 21;
 
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b = NULL;
@@ -1499,7 +1505,70 @@ static int32_t print_axp2101_summary(ii2c_device_handle_t dev) {
   return II2C_ERR_NONE;
 }
 
+static TaskHandle_t main_task_handle;
+
+static void IRAM_ATTR host_gpio_intr_handler(void *arg) {
+  if ((int32_t)arg == CORES3_I2C_INT_PIN) {
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    vTaskNotifyGiveFromISR(main_task_handle, &higher_priority_task_woken);
+    if (higher_priority_task_woken == pdTRUE) {
+      portYIELD_FROM_ISR();
+    }
+  }
+}
+
+static int32_t setup_io_extender_interrupts() {
+  igpio_config_t config;
+  igpio_get_default_config(&config);
+  config.intr_type = IGPIO_INTR_NEGEDGE;
+  config.io_num = CORES3_I2C_INT_PIN;
+  config.mode = IGPIO_MODE_INPUT;
+  config.pull_mode = IGPIO_PULL_UP;
+
+  int32_t err = igpio_configure(&config);
+  if (err != IGPIO_ERR_NONE) {
+    return err;
+  }
+
+  err = gpio_install_isr_service(0);
+  if (err != ESP_OK) {
+    return err;
+  }
+
+  err = gpio_isr_handler_add(
+      (gpio_num_t)CORES3_I2C_INT_PIN, host_gpio_intr_handler, (void *)CORES3_I2C_INT_PIN);
+  if (err != ESP_OK) {
+    return err;
+  }
+
+  err = aw9523b_port_dir_set(aw9523b,
+                             CORES3_AW9523B_TOUCH_INT_PORT,
+                             CORES3_AW9523B_TOUCH_INT_PIN,
+                             AW9523B_PORT_DIRECTION_INPUT);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  uint8_t pin_level;
+  err = aw9523b_level_get(
+      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, &pin_level);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+  (void)pin_level;
+
+  err = aw9523b_interrupt_set(
+      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, true);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  return IGPIO_ERR_NONE;
+}
+
 void app_main(void) {
+  main_task_handle = xTaskGetCurrentTaskHandle();
+
   int32_t err = create_i2c_bus();
   if (err != II2C_ERR_NONE) {
     printf("Failed to initialize system I2C bus: %s\n", ii2c_err_to_name(err));
@@ -1580,6 +1649,13 @@ void app_main(void) {
   err = configure_lcd_dc_gpio();
   if (err != IGPIO_ERR_NONE) {
     printf("Failed to configure LCD DC GPIO: %s\n", igpio_err_to_name(err));
+    release_handles();
+    return;
+  }
+
+  err = setup_io_extender_interrupts();
+  if (err != 0) {
+    printf("Failed  to setup Setup I/O Extender: %ld\n", (long)err);
     release_handles();
     return;
   }
@@ -1731,5 +1807,18 @@ void app_main(void) {
     printf("Failed to render bounded string: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
     return;
+  }
+
+  while (1) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    uint8_t input_value = 0;
+    err = aw9523b_reg8_read(
+        aw9523b, AW9523B_REG_INPUT0 + CORES3_AW9523B_TOUCH_INT_PORT, &input_value);
+    if (err != II2C_ERR_NONE) {
+      printf("Failed to read AW9523B register for PORT1 input data: %s\n", ii2c_err_to_name(err));
+      continue;
+    }
+
+    printf("Touch INT is propagated!\n");
   }
 }

@@ -258,6 +258,34 @@ int32_t aw9523b_interrupt_get(ii2c_device_handle_t dev,
   return II2C_ERR_NONE;
 }
 
+int32_t aw9523b_port_input_read(ii2c_device_handle_t dev, uint8_t port, uint8_t *input_value) {
+  if (!input_value) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  uint8_t reg = 0;
+  int32_t err = aw9523b_port_to_reg(AW9523B_REG_INPUT0, port, &reg);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  return aw9523b_reg8_read(dev, reg, input_value);
+}
+
+int32_t aw9523b_port_output_read(ii2c_device_handle_t dev, uint8_t port, uint8_t *output_value) {
+  if (!output_value) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  uint8_t reg = 0;
+  int32_t err = aw9523b_port_to_reg(AW9523B_REG_OUTPUT0, port, &reg);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  return aw9523b_reg8_read(dev, reg, output_value);
+}
+
 int32_t aw9523b_level_set(ii2c_device_handle_t dev, uint8_t port, uint8_t pin, uint8_t level) {
   uint8_t reg = 0;
   uint8_t mask = 0;

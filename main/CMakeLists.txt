@@ -11,4 +11,5 @@ idf_component_register(
 	igpio
 	ili9342
 	esp_timer
+	esp_driver_gpio
 )

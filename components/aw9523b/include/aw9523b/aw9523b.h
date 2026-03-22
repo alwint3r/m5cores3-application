@@ -300,6 +300,35 @@ int32_t aw9523b_interrupt_get(ii2c_device_handle_t dev,
 /** @{ */
 
 /**
+ * @brief Read all eight current input bits for one port.
+ *
+ * The returned byte mirrors `AW9523B_REG_INPUT0 + port`.
+ *
+ * @param dev Attached `ii2c` device handle for the AW9523B.
+ * @param port Port index to read: `0` or `1`.
+ * @param input_value Output pointer that receives the 8-bit input-state byte.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `port` is
+ * out of range or `input_value` is `NULL`, or an `II2C_ERR_*` code from
+ * `ii2c`.
+ */
+int32_t aw9523b_port_input_read(ii2c_device_handle_t dev, uint8_t port, uint8_t *input_value);
+
+/**
+ * @brief Read the current output latch byte for one port.
+ *
+ * The returned byte mirrors `AW9523B_REG_OUTPUT0 + port`.
+ *
+ * @param dev Attached `ii2c` device handle for the AW9523B.
+ * @param port Port index to read: `0` or `1`.
+ * @param output_value Output pointer that receives the 8-bit output-latch
+ * value.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `port` is
+ * out of range or `output_value` is `NULL`, or an `II2C_ERR_*` code from
+ * `ii2c`.
+ */
+int32_t aw9523b_port_output_read(ii2c_device_handle_t dev, uint8_t port, uint8_t *output_value);
+
+/**
  * @brief Write the output latch for one pin.
  *
  * This helper updates `AW9523B_REG_OUTPUT0 + port`. Any non-zero `level` is
