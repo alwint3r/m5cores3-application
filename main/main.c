@@ -1676,26 +1676,7 @@ void app_main(void) {
   }
 
   uint16_t foreground_color = 0xFFFF;
-  const char *msg2 =
-      "Hello world! This text may overflow on the x axis.\nAlso, this is actually a new line! Will "
-      "this overflow too? Ah great! Then, how about this?\nI'm at the new line and I'm about to "
-      "overflow the Y axis too! How's that?";
-
-  rect_area_t bounding = {
-      .x0 = 10,
-      .y0 = 64,
-      .x1 = LCD_WIDTH - 10,
-      .y1 = LCD_HEIGHT - 30,
-  };
-  int16_t x = bounding.x0;
-  int16_t y = lcd_text_first_baseline_y(&font_view, &bounding);
-  err = lcd_render_c_str_bounded(
-      &display, &font_view, msg2, x, y, &bounding, foreground_color, background_color, &x, &y);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Failed to render bounded string: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
-    return;
-  }
+  int16_t x, y;
 
   char free_heap_str[64] = {0};
   snprintf(
@@ -1712,12 +1693,43 @@ void app_main(void) {
     printf("Failed to render status bar: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
   }
-  x = bounding.x0;
+  x = status_bounding.x0;
   y = lcd_text_first_baseline_y(&opensans_16, &status_bounding) + 5;
   err = lcd_render_c_str_bounded(
       &display, &opensans_16, free_heap_str, x, y, &status_bounding, 0x0000, 0xFFFF, NULL, NULL);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render heap info: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
+  }
+
+  const char *msg2 =
+      "Hello world! This text may overflow on the x axis.\nAlso, this is actually a new line! Will "
+      "this overflow too? Ah great! Then, how about this?\nI'm at the new line and I'm about to "
+      "overflow the Y axis too! How's that?";
+
+  rect_area_t bounding = {
+      .x0 = 10,
+      .y0 = 64,
+      .x1 = LCD_WIDTH - 10,
+      .y1 = LCD_HEIGHT - 30,
+  };
+  x = bounding.x0;
+  y = lcd_text_first_baseline_y(&font_view, &bounding);
+#if 0
+  err = lcd_render_c_str_bounded(
+      &display, &font_view, msg2, x, y, &bounding, foreground_color, background_color, &x, &y);
+#else
+  for (size_t i = 0; i < strlen(msg2); i++) {
+    err = lcd_putc_wrap(
+        &display, &font_view, msg2[i], x, y, &bounding, foreground_color, background_color, &x, &y);
+    if (err != ILI9342_ERR_NONE) {
+      break;
+    }
+  }
+#endif
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed to render bounded string: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
+    release_handles();
+    return;
   }
 }
