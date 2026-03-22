@@ -21,6 +21,7 @@
 #include <freertos/task.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <esp_log.h>
 
 static const int32_t SYS_I2C_SDA = 12;
 static const int32_t SYS_I2C_SCL = 11;
@@ -47,6 +48,8 @@ static const uint8_t CORES3_AW9523B_LCD_RST_PIN = 1;
 
 static const uint8_t CORES3_AW9523B_TOUCH_INT_PORT = 1;
 static const uint8_t CORES3_AW9523B_TOUCH_INT_PIN = 2;
+static const uint8_t CORES3_AW9523B_TOUCH_RST_PORT = 0;
+static const uint8_t CORES3_AW9523B_TOUCH_RST_PIN = 0;
 static const int CORES3_I2C_INT_PIN = 21;
 
 static ii2c_master_bus_handle_t sys_i2c = NULL;
@@ -1517,7 +1520,46 @@ static void IRAM_ATTR host_gpio_intr_handler(void *arg) {
   }
 }
 
-static int32_t setup_io_extender_interrupts() {
+static int32_t configure_touch_screen(void) {
+  int32_t err = aw9523b_port_dir_set(aw9523b,
+                                     CORES3_AW9523B_TOUCH_INT_PORT,
+                                     CORES3_AW9523B_TOUCH_INT_PIN,
+                                     AW9523B_PORT_DIRECTION_INPUT);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  err = aw9523b_port_dir_set(aw9523b,
+                             CORES3_AW9523B_TOUCH_RST_PORT,
+                             CORES3_AW9523B_TOUCH_RST_PIN,
+                             AW9523B_PORT_DIRECTION_OUTPUT);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  err = aw9523b_level_set(aw9523b, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  uint8_t pin_level;
+  err = aw9523b_level_get(
+      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, &pin_level);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+  (void)pin_level;
+
+  err = aw9523b_interrupt_set(
+      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, true);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  return II2C_ERR_NONE;
+}
+
+static int32_t configure_io_extender_interrupt(void) {
   igpio_config_t config;
   igpio_get_default_config(&config);
   config.intr_type = IGPIO_INTR_NEGEDGE;
@@ -1538,28 +1580,6 @@ static int32_t setup_io_extender_interrupts() {
   err = gpio_isr_handler_add(
       (gpio_num_t)CORES3_I2C_INT_PIN, host_gpio_intr_handler, (void *)CORES3_I2C_INT_PIN);
   if (err != ESP_OK) {
-    return err;
-  }
-
-  err = aw9523b_port_dir_set(aw9523b,
-                             CORES3_AW9523B_TOUCH_INT_PORT,
-                             CORES3_AW9523B_TOUCH_INT_PIN,
-                             AW9523B_PORT_DIRECTION_INPUT);
-  if (err != II2C_ERR_NONE) {
-    return err;
-  }
-
-  uint8_t pin_level;
-  err = aw9523b_level_get(
-      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, &pin_level);
-  if (err != II2C_ERR_NONE) {
-    return err;
-  }
-  (void)pin_level;
-
-  err = aw9523b_interrupt_set(
-      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, true);
-  if (err != II2C_ERR_NONE) {
     return err;
   }
 
@@ -1653,9 +1673,16 @@ void app_main(void) {
     return;
   }
 
-  err = setup_io_extender_interrupts();
+  err = configure_io_extender_interrupt();
   if (err != 0) {
-    printf("Failed  to setup Setup I/O Extender: %ld\n", (long)err);
+    printf("Failed to setup Setup I/O Extender: %ld\n", (long)err);
+    release_handles();
+    return;
+  }
+
+  err = configure_touch_screen();
+  if (err != 0) {
+    printf("Failed to configure the touch screen: %s (%ld)\n", ii2c_err_to_name(err), (long)err);
     release_handles();
     return;
   }
@@ -1820,7 +1847,6 @@ void app_main(void) {
     }
 
     (void)input_value;
-
-    printf("Touch INT is propagated!\n");
+    ESP_LOGI("TOUCH", "Touch INT is propagated!");
   }
 }
