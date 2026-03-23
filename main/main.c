@@ -272,6 +272,34 @@ static int32_t lcd_fill_rect(ili9342_t *display,
   return ILI9342_ERR_NONE;
 }
 
+static int32_t lcd_fill_round_rect_r6(ili9342_t *display,
+                                      uint16_t x0,
+                                      uint16_t y0,
+                                      uint16_t x1,
+                                      uint16_t y1,
+                                      uint16_t color) {
+  static const uint8_t inset[6] = {3, 2, 1, 1, 0, 0};
+  int32_t err = lcd_fill_rect(display, x0, y0 + 6, x1, y1 - 6, color);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  for (uint16_t dy = 0; dy < 6; ++dy) {
+    uint16_t dx = inset[dy];
+    err = lcd_fill_rect(display, x0 + dx, y0 + dy, x1 - dx, y0 + dy, color);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+
+    err = lcd_fill_rect(display, x0 + dx, y1 - dy, x1 - dx, y1 - dy, color);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+  }
+
+  return ILI9342_ERR_NONE;
+}
+
 static int32_t lcd_fill_screen(ili9342_t *display, uint16_t color) {
   int32_t err = lcd_fill_rect(display, 0U, 0U, LCD_WIDTH - 1U, LCD_HEIGHT - 1U, color);
   if (err != ILI9342_ERR_NONE) {
@@ -1190,6 +1218,41 @@ static __attribute__((unused)) int32_t lcd_putc_wrap(ili9342_t *display,
       display, font, &c, 1U, x, y, bounding, foreground_color, background_color, next_x, next_y);
 }
 
+static int32_t lcd_draw_rounded_button(ili9342_t *display,
+                                       bmf_font_view_t *font,
+                                       const rect_area_t *box,
+                                       const char *label,
+                                       uint16_t fill_color,
+                                       uint16_t text_color) {
+  int32_t err = lcd_fill_round_rect_r6(display,
+                                       (uint16_t)box->x0,
+                                       (uint16_t)box->y0,
+                                       (uint16_t)box->x1,
+                                       (uint16_t)box->y1,
+                                       fill_color);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  int16_t label_y = lcd_text_first_baseline_y(font, box);
+
+  return lcd_render_c_str_bounded(display,
+                                  font,
+                                  label,
+                                  (int16_t)(box->x0 + 12),
+                                  label_y,
+                                  box,
+                                  text_color,
+                                  fill_color,
+                                  NULL,
+                                  NULL);
+}
+
+static bool lcd_touch_point_in_rect(uint16_t x, uint16_t y, const rect_area_t *r) {
+  return x >= (uint16_t)r->x0 && x <= (uint16_t)r->x1 && y >= (uint16_t)r->y0 &&
+         y <= (uint16_t)r->y1;
+}
+
 static int32_t create_i2c_bus(void) {
   ii2c_master_bus_config_t bus_cfg;
   ii2c_get_default_master_bus_config(&bus_cfg);
@@ -1898,6 +1961,39 @@ void app_main(void) {
     release_handles();
     return;
   }
+  rect_area_t button = {
+      .x0 = 10,
+      .y0 = 10,
+      .x1 = 80,
+      .y1 = 50,
+  };
+
+  err = lcd_fill_round_rect_r6(&display,
+                               (uint16_t)button.x0,
+                               (uint16_t)button.y0,
+                               (uint16_t)button.x1,
+                               (uint16_t)button.y1,
+                               0x001F);
+
+  int16_t label_y = lcd_text_first_baseline_y(&opensans_16, &button);
+  err = lcd_render_c_str_bounded(&display,
+                                 &opensans_16,
+                                 "Tap me",
+                                 button.x0 + 15,
+                                 label_y + 12,
+                                 &button,
+                                 0xFFFF,
+                                 0x001F,
+                                 NULL,
+                                 NULL);
+
+  rect_area_t another = {
+      .x0 = button.x1 + 10,
+      .y0 = button.y0,
+      .x1 = button.x1 + button.x1,
+      .y1 = button.y1,
+  };
+  lcd_draw_rounded_button(&display, &opensans_16, &another, "Also me", 0xFFFF, 0x0000);
 
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -1917,7 +2013,10 @@ void app_main(void) {
       printf("Failed to read the touch data: %s (%ld)", ft6x36_err_to_name(err), (long)err);
     } else {
       ESP_LOGI("TOUCH", "Touch count = %u", out_touch.touch_count);
-			ESP_LOGI("TOUCH", "Gesture ID: %u", out_touch.gesture_id);
+      ESP_LOGI("TOUCH", "Gesture ID: %u", out_touch.gesture_id);
+
+      // note: x, y coordinate is upside down in relation to the LCD orientation
+      // we flipped the LCD orientation though.
       for (uint8_t count = 0; count < out_touch.touch_count; count++) {
         ESP_LOGI("TOUCH",
                  "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u\n",
@@ -1927,6 +2026,16 @@ void app_main(void) {
                  out_touch.points[count].area,
                  out_touch.points[count].weight,
                  (uint8_t)out_touch.points[count].event);
+
+        uint16_t x = LCD_WIDTH - out_touch.points[count].x;
+        uint16_t y = LCD_HEIGHT - out_touch.points[count].y;
+        if (lcd_touch_point_in_rect(x, y, &button)) {
+          ESP_LOGI("TOUCH", "Button is touched!");
+        }
+
+        if (lcd_touch_point_in_rect(x, y, &another)) {
+          ESP_LOGI("TOUCH", "Another button is touched!");
+        }
       }
     }
   }
