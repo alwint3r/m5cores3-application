@@ -272,12 +272,48 @@ static int32_t lcd_fill_rect(ili9342_t *display,
   return ILI9342_ERR_NONE;
 }
 
+static int32_t lcd_fill_round_rect_r6_top(ili9342_t *display,
+                                          const rect_area_t *bounds,
+                                          uint16_t color) {
+  if (!display || !bounds) {
+    printf("Dang it son\n");
+    return ILI9342_ERR_INVALID_ARG;
+  }
+  static const uint8_t inset[6] = {3, 2, 1, 1, 0, 0};
+
+  // we fill the middle
+  int32_t err =
+      lcd_fill_rect(display, bounds->x0, bounds->y0 + 6, bounds->x1, bounds->y1 - 6, color);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Dang it 2 son\n");
+
+    return err;
+  }
+
+  for (uint16_t dy = 0; dy < 6; ++dy) {
+    uint16_t dx = inset[dy];
+    err = lcd_fill_rect(
+        display, bounds->x0 + dx, bounds->y0 + dy, bounds->x1 - dx, bounds->y0 + dy, color);
+    if (err != ILI9342_ERR_NONE) {
+      printf("Dang it 3 son\n");
+
+      return err;
+    }
+  }
+
+  return ILI9342_ERR_NONE;
+}
+
 static int32_t lcd_fill_round_rect_r6(ili9342_t *display,
                                       uint16_t x0,
                                       uint16_t y0,
                                       uint16_t x1,
                                       uint16_t y1,
                                       uint16_t color) {
+  // how do we compute this?
+  // all I know, 3, 2, 1 are factors of 6
+  // but, the leftmost are the top or bottom
+  // and the rightmost is the middle of the button
   static const uint8_t inset[6] = {3, 2, 1, 1, 0, 0};
   int32_t err = lcd_fill_rect(display, x0, y0 + 6, x1, y1 - 6, color);
   if (err != ILI9342_ERR_NONE) {
@@ -1961,11 +1997,17 @@ void app_main(void) {
     release_handles();
     return;
   }
+
+  uint16_t buttons_width = 80;
+  uint16_t buttons_height = 50;
+  uint16_t buttons_x_offset = 10;
+  uint16_t buttons_y_offset = 10;
+  uint16_t buttons_x_margin = 10;
   rect_area_t button = {
-      .x0 = 10,
-      .y0 = 10,
-      .x1 = 80,
-      .y1 = 50,
+      .x0 = buttons_x_offset + buttons_x_margin,
+      .y0 = buttons_y_offset,
+      .x1 = buttons_x_offset + buttons_width,
+      .y1 = buttons_height,
   };
 
   err = lcd_fill_round_rect_r6(&display,
@@ -1986,14 +2028,27 @@ void app_main(void) {
                                  0x001F,
                                  NULL,
                                  NULL);
-
+  buttons_x_offset += buttons_width;
+  // buttons_y_offset is not incremented becase we're not moving down.
   rect_area_t another = {
-      .x0 = button.x1 + 10,
-      .y0 = button.y0,
-      .x1 = button.x1 + button.x1,
-      .y1 = button.y1,
+      .x0 = buttons_x_offset + buttons_x_margin,
+      .y0 = buttons_y_offset,
+      .x1 = buttons_x_offset + buttons_width,
+      .y1 = buttons_height,
   };
   lcd_draw_rounded_button(&display, &opensans_16, &another, "Also me", 0xFFFF, 0x0000);
+
+  buttons_x_offset += buttons_width;
+
+  err = lcd_fill_round_rect_r6_top(&display,
+                                   &(const rect_area_t){
+                                       .x0 = buttons_x_offset + buttons_x_margin,
+                                       .y0 = buttons_y_offset,
+                                       .x1 = buttons_x_offset + buttons_width,
+                                       .y1 = buttons_height,
+                                   },
+                                   0xFF08);
+  printf("lcd_fill_round_rect_r6_top -> %ld\n", (long)err);
 
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -2019,7 +2074,7 @@ void app_main(void) {
       // we flipped the LCD orientation though.
       for (uint8_t count = 0; count < out_touch.touch_count; count++) {
         ESP_LOGI("TOUCH",
-                 "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u\n",
+                 "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u",
                  count,
                  out_touch.points[count].x,
                  out_touch.points[count].y,
@@ -2029,12 +2084,19 @@ void app_main(void) {
 
         uint16_t x = LCD_WIDTH - out_touch.points[count].x;
         uint16_t y = LCD_HEIGHT - out_touch.points[count].y;
-        if (lcd_touch_point_in_rect(x, y, &button)) {
-          ESP_LOGI("TOUCH", "Button is touched!");
-        }
 
-        if (lcd_touch_point_in_rect(x, y, &another)) {
-          ESP_LOGI("TOUCH", "Another button is touched!");
+        switch (out_touch.points[count].event) {
+          case FT6X36_TOUCH_EVENT_PRESS_DOWN:
+            if (lcd_touch_point_in_rect(x, y, &button)) {
+              ESP_LOGI("TOUCH", "Button is touched!");
+            }
+
+            if (lcd_touch_point_in_rect(x, y, &another)) {
+              ESP_LOGI("TOUCH", "Another button is touched!");
+            }
+
+          default:
+            break;
         }
       }
     }
