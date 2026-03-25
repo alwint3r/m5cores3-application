@@ -346,8 +346,7 @@ int32_t axp2101_pmu_common_cfg_get(axp2101_t *pmic, axp2101_pmu_common_cfg_t *ou
   return AXP2101_ERR_NONE;
 }
 
-int32_t axp2101_pmu_common_cfg_set(axp2101_t *pmic,
-                                   const axp2101_pmu_common_cfg_t *config) {
+int32_t axp2101_pmu_common_cfg_set(axp2101_t *pmic, const axp2101_pmu_common_cfg_t *config) {
   if (!config || !axp2101_pmu_common_cfg_raw_bits_7_6_valid(config->raw_bits_7_6)) {
     return AXP2101_ERR_INVALID_ARG;
   }
@@ -395,8 +394,7 @@ int32_t axp2101_irq_off_on_level_get(axp2101_t *pmic, axp2101_irq_off_on_level_t
   return AXP2101_ERR_NONE;
 }
 
-int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic,
-                                     const axp2101_irq_off_on_level_t *config) {
+int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic, const axp2101_irq_off_on_level_t *config) {
   if (!config) {
     return AXP2101_ERR_INVALID_ARG;
   }
@@ -648,9 +646,7 @@ static int32_t axp2101_aldo_bldo_voltage_set(axp2101_t *pmic, uint8_t reg, uint1
   return axp2101_voltage_set(pmic, &spec, mv);
 }
 
-static int32_t axp2101_aldo_bldo_voltage_get(axp2101_t *pmic,
-                                             uint8_t reg,
-                                             uint16_t *out_mv) {
+static int32_t axp2101_aldo_bldo_voltage_get(axp2101_t *pmic, uint8_t reg, uint16_t *out_mv) {
   axp2101_voltage_spec_t spec = AXP2101_VOLTAGE_SPEC_ALDO_BLDO;
   spec.reg = reg;
   return axp2101_voltage_get(pmic, &spec, out_mv);
@@ -742,10 +738,7 @@ int32_t axp2101_reg8_set_bits(axp2101_t *pmic, uint8_t reg, uint8_t bits) {
   return axp2101_reg8_write(pmic, reg, current_value | bits);
 }
 
-int32_t axp2101_reg8_update_bits(axp2101_t *pmic,
-                                 uint8_t reg,
-                                 uint8_t mask,
-                                 uint8_t new_value) {
+int32_t axp2101_reg8_update_bits(axp2101_t *pmic, uint8_t reg, uint8_t mask, uint8_t new_value) {
   uint8_t current_value = 0;
   int32_t err = axp2101_reg8_read(pmic, reg, &current_value);
   if (err != AXP2101_ERR_NONE) {

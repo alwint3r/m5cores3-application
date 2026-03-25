@@ -270,8 +270,7 @@ int32_t axp2101_pmu_common_cfg_get(axp2101_t *pmic, axp2101_pmu_common_cfg_t *ou
  * `NULL` or `raw_bits_7_6` exceeds the two-bit range, or an `II2C_ERR_*` code
  * from `ii2c`.
  */
-int32_t axp2101_pmu_common_cfg_set(axp2101_t *pmic,
-                                   const axp2101_pmu_common_cfg_t *config);
+int32_t axp2101_pmu_common_cfg_set(axp2101_t *pmic, const axp2101_pmu_common_cfg_t *config);
 
 /** @brief Power-key IRQ timing choices used by `AXP2101_REG_IRQ_OFF_ON_LEVEL` bits 5:4. */
 typedef enum axp2101_power_key_irq_time {
@@ -342,8 +341,7 @@ int32_t axp2101_irq_off_on_level_get(axp2101_t *pmic, axp2101_irq_off_on_level_t
  * `NULL` or contains an out-of-range enum value, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic,
-                                     const axp2101_irq_off_on_level_t *config);
+int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic, const axp2101_irq_off_on_level_t *config);
 
 typedef struct axp2101_charger_current_data axp2101_charger_current_t;
 /** @brief Decoded charger-current configuration values. */
@@ -872,10 +870,7 @@ int32_t axp2101_reg8_set_bits(axp2101_t *pmic, uint8_t reg, uint8_t bits);
  * @param new_value Replacement value applied under `mask`.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_reg8_update_bits(axp2101_t *pmic,
-                                 uint8_t reg,
-                                 uint8_t mask,
-                                 uint8_t new_value);
+int32_t axp2101_reg8_update_bits(axp2101_t *pmic, uint8_t reg, uint8_t mask, uint8_t new_value);
 
 /**
  * @brief Read a 14-bit value from a two-byte AXP2101 register pair.
