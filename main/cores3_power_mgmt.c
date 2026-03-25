@@ -46,10 +46,6 @@ static int32_t axp2101_i2c_write_read(void *context,
   return II2C_ERR_NONE;
 }
 
-static const char *bool_to_yes_no(bool value) {
-  return value ? "yes" : "no";
-}
-
 const char *cores3_power_mgmt_err_to_name(int32_t err) {
   if (err >= AW9523B_ERR_BASE && err < (AW9523B_ERR_BASE + 0x100)) {
     return aw9523b_err_to_name(err);
@@ -61,7 +57,7 @@ const char *cores3_power_mgmt_err_to_name(int32_t err) {
   return ii2c_err_to_name(err);
 }
 
-static const char *axp2101_charging_status_to_string(axp2101_charging_status_t status) {
+const char *axp2101_charging_status_to_string(axp2101_charging_status_t status) {
   switch (status) {
     case AXP2101_CHARGING_STATUS_TRI_CHARGE:
       return "trickle";
@@ -346,48 +342,6 @@ static int32_t apply_cores3_axp2101_startup(axp2101_t *pmic) {
   return configure_axp2101_adc(pmic);
 }
 
-static int32_t print_axp2101_summary(axp2101_t *pmic) {
-  axp2101_status1_t status1 = {0};
-  int32_t err = axp2101_status1_get(pmic, &status1);
-  if (err != AXP2101_ERR_NONE) {
-    return err;
-  }
-
-  axp2101_status2_t status2 = {0};
-  err = axp2101_status2_get(pmic, &status2);
-  if (err != AXP2101_ERR_NONE) {
-    return err;
-  }
-
-  uint16_t vbus_mv = 0;
-  err = axp2101_adc_vbus_read(pmic, &vbus_mv);
-  if (err != AXP2101_ERR_NONE) {
-    return err;
-  }
-
-  uint16_t vsys_mv = 0;
-  err = axp2101_adc_vsys_read(pmic, &vsys_mv);
-  if (err != AXP2101_ERR_NONE) {
-    return err;
-  }
-
-  uint16_t vbat_mv = 0;
-  err = axp2101_adc_vbat_read(pmic, &vbat_mv);
-  if (err != AXP2101_ERR_NONE) {
-    return err;
-  }
-
-  printf("VBUS good: %s\n", bool_to_yes_no(status1.vbus_good));
-  printf("Battery present: %s\n", bool_to_yes_no(status1.battery_present));
-  printf("System power on: %s\n", bool_to_yes_no(status2.system_power_on));
-  printf("Charging status: %s\n", axp2101_charging_status_to_string(status2.charging_status));
-  printf("VBUS: %u mV\n", vbus_mv);
-  printf("VSYS: %u mV\n", vsys_mv);
-  printf("VBAT: %u mV\n", vbat_mv);
-
-  return AXP2101_ERR_NONE;
-}
-
 int32_t cores3_power_mgmt_init(ii2c_device_handle_t device, aw9523b_t *expander, axp2101_t *pmic) {
   if (device == NULL || expander == NULL || pmic == NULL) {
     return II2C_ERR_INVALID_ARG;
@@ -409,12 +363,6 @@ int32_t cores3_power_mgmt_init(ii2c_device_handle_t device, aw9523b_t *expander,
   if (err != AXP2101_ERR_NONE) {
     printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n",
            cores3_power_mgmt_err_to_name(err));
-    return err;
-  }
-
-  err = print_axp2101_summary(pmic);
-  if (err != AXP2101_ERR_NONE) {
-    printf("Failed to read post-startup AXP2101 summary: %s\n", cores3_power_mgmt_err_to_name(err));
     return err;
   }
 
