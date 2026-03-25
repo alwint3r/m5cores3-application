@@ -1,7 +1,8 @@
 idf_component_register(
 	SRCS
 		"main.c"
-		"bmf_reader.c"
+		"graphics/bmf_reader.c"
+		"power_mgmt.c"
   INCLUDE_DIRS "."
 	REQUIRES
 	ii2c
