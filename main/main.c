@@ -97,7 +97,7 @@ void app_main(void) {
     return;
   }
 
-  err = cores3_display_init(&board_display, &app.io_expander);
+  err = cores3_display_init(&board_display, app.board.display_spi_device, &app.io_expander);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to initialize CoreS3 display: %ld\n", (long)err);
     return;
