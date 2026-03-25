@@ -9,7 +9,6 @@ static int32_t cores3_check_i2c_devices_address(cores3_board_t *board) {
   uint16_t addresses[] = {
       CORES3_AXP2101_I2C_ADDRESS,
       CORES3_AW9523B_I2C_ADDRESS,
-      CORES3_FT6336_I2C_ADDRESS,
   };
   int32_t err;
   size_t num_addresses = sizeof(addresses) / sizeof(addresses[0]);

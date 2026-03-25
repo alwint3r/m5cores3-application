@@ -4,10 +4,20 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 static const uint8_t CORES3_AW9523B_TOUCH_INT_PORT = 1;
 static const uint8_t CORES3_AW9523B_TOUCH_INT_PIN = 2;
 static const uint8_t CORES3_AW9523B_TOUCH_RST_PORT = 0;
 static const uint8_t CORES3_AW9523B_TOUCH_RST_PIN = 0;
+static const uint32_t CORES3_TOUCH_POWER_SETTLE_DELAY_MS = 10;
+static const uint32_t CORES3_TOUCH_RESET_LOW_DELAY_MS = 10;
+static const uint32_t CORES3_TOUCH_RESET_READY_DELAY_MS = 120;
+
+static void delay_ms(uint32_t ms) {
+  vTaskDelay(pdMS_TO_TICKS(ms));
+}
 
 static ii2c_device_handle_t ft6336_device_from_context(void *context) {
   return (ii2c_device_handle_t)context;
@@ -71,10 +81,37 @@ static int32_t configure_touch_aw9523b_pins(aw9523b_t *expander) {
   }
 
   err = aw9523b_level_set(
+      expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 0);
+  if (err != AW9523B_ERR_NONE) {
+    return err;
+  }
+
+  return AW9523B_ERR_NONE;
+}
+
+static int32_t prepare_touch_power_and_reset(aw9523b_t *expander) {
+  if (expander == NULL) {
+    return AW9523B_ERR_INVALID_ARG;
+  }
+
+  puts("FT6x36 transport attached; waiting for LCD-linked power to settle");
+  delay_ms(CORES3_TOUCH_POWER_SETTLE_DELAY_MS);
+
+  int32_t err = aw9523b_level_set(
+      expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 0);
+  if (err != AW9523B_ERR_NONE) {
+    return err;
+  }
+
+  delay_ms(CORES3_TOUCH_RESET_LOW_DELAY_MS);
+
+  err = aw9523b_level_set(
       expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
   if (err != AW9523B_ERR_NONE) {
     return err;
   }
+
+  delay_ms(CORES3_TOUCH_RESET_READY_DELAY_MS);
 
   uint8_t pin_level = 0;
   err = aw9523b_level_get(
@@ -90,6 +127,7 @@ static int32_t configure_touch_aw9523b_pins(aw9523b_t *expander) {
     return err;
   }
 
+  puts("FT6x36 reset released.");
   return AW9523B_ERR_NONE;
 }
 
@@ -106,6 +144,12 @@ int32_t cores3_touch_init(ii2c_device_handle_t device, aw9523b_t *expander, ft6x
   touch->transport_context = device;
   touch->transport_write = ft6336_i2c_write;
   touch->transport_write_read = ft6336_i2c_write_read;
+
+  err = prepare_touch_power_and_reset(expander);
+  if (err != AW9523B_ERR_NONE) {
+    cores3_touch_deinit(touch);
+    return err;
+  }
 
   uint8_t touch_fwver = 0;
   err = ft6x36_firmware_version_get(touch, &touch_fwver);

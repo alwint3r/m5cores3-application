@@ -21,6 +21,9 @@
 #include "graphics/fonts/open_sans_regular_16_4bpp.h"
 #include "graphics/fonts/open_sans_regular_32_4bpp.h"
 #include "graphics/text_renderer.h"
+#include "graphics/bitmap_icon.h"
+#define IMG2BITMAP_DECLARE_GRAPHICS_BITMAP_ICON
+#include "graphics/icons/icon_wifi_connected_4bpp.h"
 
 typedef struct {
   aw9523b_t io_expander;
@@ -66,7 +69,7 @@ void app_main(void) {
 
   int32_t err = cores3_board_init(&app.board);
   if (err != 0) {
-    printf("Failed to initialize system I2C bus: %ld\n", (long)err);
+    printf("Failed to initialize board: %ld\n", (long)err);
     return;
   }
 
@@ -167,8 +170,16 @@ void app_main(void) {
     return;
   }
 
+  err = graphics_draw_bitmap_icon(&app_surface,
+                                  &icon_wifi_connected,
+                                  cores3_display_width() - icon_wifi_connected.width - 10,
+                                  cores3_display_height() - icon_wifi_connected.height - 5,
+                                  &status_bar_rect,
+                                  0x0000,
+                                  status_bar_rect_color);
+
   int16_t x = status_bar_rect.x0 + status_bar_left_margin;
-  int16_t y = (int16_t)(graphics_text_first_baseline_y(&opensans_16, &status_bar_rect) + 5);
+  int16_t y = (int16_t)(graphics_text_first_baseline_y(&opensans_16, &status_bar_rect) + 8);
   err = graphics_draw_text_bounded(&app_surface,
                                    &opensans_16,
                                    free_heap_str,
