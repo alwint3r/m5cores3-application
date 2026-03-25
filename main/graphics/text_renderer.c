@@ -250,19 +250,55 @@ static int32_t flush_prepared_glyph_run(display_surface_t *surface,
                                 foreground_color);
 }
 
-int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font, const graphics_rect_t *bounding) {
-  int16_t first_line_y = bounding->y0;
-  if (font->ascent > 0) {
-    first_line_y = (int16_t)(bounding->y0 + font->ascent);
-  } else if (font->line_height > 0U) {
-    first_line_y = (int16_t)(bounding->y0 + (int16_t)font->line_height - 1);
+static int16_t graphics_text_line_height_get(const bmf_font_view_t *font) {
+  if (font->line_height > 0U) {
+    return (int16_t)font->line_height;
   }
+
+  if (font->ascent > 0) {
+    return font->ascent;
+  }
+
+  return 1;
+}
+
+static int16_t graphics_text_baseline_for_line_top(const bmf_font_view_t *font, int32_t line_y0) {
+  if (font->ascent > 0) {
+    return (int16_t)(line_y0 + font->ascent);
+  }
+
+  return (int16_t)(line_y0 + graphics_text_line_height_get(font) - 1);
+}
+
+int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font, const graphics_rect_t *bounding) {
+  int16_t first_line_y = graphics_text_baseline_for_line_top(font, bounding->y0);
 
   if (first_line_y > bounding->y1) {
     first_line_y = bounding->y1;
   }
 
   return first_line_y;
+}
+
+int16_t graphics_text_center_baseline_y(const bmf_font_view_t *font,
+                                        const graphics_rect_t *bounding) {
+  int32_t bounding_height = (int32_t)bounding->y1 - (int32_t)bounding->y0 + 1;
+  int16_t line_height = graphics_text_line_height_get(font);
+  int32_t line_y0 = bounding->y0;
+  if (bounding_height > line_height) {
+    line_y0 += (bounding_height - line_height) / 2;
+  }
+
+  int16_t centered_baseline_y = graphics_text_baseline_for_line_top(font, line_y0);
+  int16_t first_line_y = graphics_text_first_baseline_y(font, bounding);
+  if (centered_baseline_y < first_line_y) {
+    centered_baseline_y = first_line_y;
+  }
+  if (centered_baseline_y > bounding->y1) {
+    centered_baseline_y = bounding->y1;
+  }
+
+  return centered_baseline_y;
 }
 
 static int32_t clear_text_line(display_surface_t *surface,

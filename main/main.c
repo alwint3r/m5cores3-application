@@ -50,7 +50,7 @@ static int32_t draw_rounded_button(display_surface_t *surface,
     return err;
   }
 
-  int16_t label_y = graphics_text_first_baseline_y(font, box);
+  int16_t label_y = graphics_text_center_baseline_y(font, box);
 
   return graphics_draw_text_bounded(surface,
                                     font,
@@ -179,7 +179,7 @@ void app_main(void) {
                                   status_bar_rect_color);
 
   int16_t x = status_bar_rect.x0 + status_bar_left_margin;
-  int16_t y = (int16_t)(graphics_text_first_baseline_y(&opensans_16, &status_bar_rect) + 8);
+  int16_t y = (int16_t)graphics_text_center_baseline_y(&opensans_16, &status_bar_rect);
   err = graphics_draw_text_bounded(&app_surface,
                                    &opensans_16,
                                    free_heap_str,
@@ -239,12 +239,12 @@ void app_main(void) {
     return;
   }
 
-  int16_t label_y = graphics_text_first_baseline_y(&opensans_16, &button);
+  int16_t label_y = graphics_text_center_baseline_y(&opensans_16, &button);
   err = graphics_draw_text_bounded(&app_surface,
                                    &opensans_16,
                                    "Tap me",
                                    (int16_t)(button.x0 + 15),
-                                   (int16_t)(label_y + 12),
+                                   label_y,
                                    &button,
                                    0xFFFF,
                                    0x001F,

@@ -6,6 +6,8 @@
 #include "display_surface.h"
 
 int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font, const graphics_rect_t *bounding);
+int16_t graphics_text_center_baseline_y(const bmf_font_view_t *font,
+                                        const graphics_rect_t *bounding);
 
 int32_t graphics_draw_text_bounded(display_surface_t *surface,
                                    bmf_font_view_t *font,
