@@ -1,5 +1,6 @@
 #include "cores3_power_mgmt.h"
 
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +11,40 @@
 static const uint8_t CORES3_AW9523B_BOOST_EN_PORT = 1;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
 static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
+
+static ii2c_device_handle_t axp2101_device_from_context(void *context) {
+  return (ii2c_device_handle_t)context;
+}
+
+static int32_t axp2101_i2c_write(void *context, const uint8_t *write_buffer, size_t write_size) {
+  ii2c_device_handle_t device = axp2101_device_from_context(context);
+  if (device == NULL) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  return ii2c_master_transmit(device, write_buffer, write_size);
+}
+
+static int32_t axp2101_i2c_write_read(void *context,
+                                      const uint8_t *write_buffer,
+                                      size_t write_size,
+                                      uint8_t *read_buffer,
+                                      size_t *read_size,
+                                      size_t read_capacity) {
+  ii2c_device_handle_t device = axp2101_device_from_context(context);
+  if (device == NULL || read_buffer == NULL || read_size == NULL) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  int32_t err =
+      ii2c_master_transmit_receive(device, write_buffer, write_size, read_buffer, read_capacity);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  *read_size = read_capacity;
+  return II2C_ERR_NONE;
+}
 
 static const char *bool_to_yes_no(bool value) {
   return value ? "yes" : "no";
@@ -353,10 +388,14 @@ static int32_t print_axp2101_summary(axp2101_t *pmic) {
   return AXP2101_ERR_NONE;
 }
 
-int32_t cores3_power_mgmt_init(aw9523b_t *expander, axp2101_t *pmic) {
-  if (expander == NULL || pmic == NULL) {
+int32_t cores3_power_mgmt_init(ii2c_device_handle_t device, aw9523b_t *expander, axp2101_t *pmic) {
+  if (device == NULL || expander == NULL || pmic == NULL) {
     return II2C_ERR_INVALID_ARG;
   }
+
+  pmic->transport_context = device;
+  pmic->transport_write = axp2101_i2c_write;
+  pmic->transport_write_read = axp2101_i2c_write_read;
 
   puts("Applying CoreS3 startup sequence with local components...");
 
@@ -368,7 +407,8 @@ int32_t cores3_power_mgmt_init(aw9523b_t *expander, axp2101_t *pmic) {
 
   err = apply_cores3_axp2101_startup(pmic);
   if (err != AXP2101_ERR_NONE) {
-    printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n", cores3_power_mgmt_err_to_name(err));
+    printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n",
+           cores3_power_mgmt_err_to_name(err));
     return err;
   }
 

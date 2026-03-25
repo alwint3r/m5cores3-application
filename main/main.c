@@ -5,7 +5,6 @@
 #include <aw9523b/aw9523b.h>
 #include <axp2101/axp2101.h>
 #include <ft6x36/ft6x36.h>
-#include <ii2c/ii2c.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -23,53 +22,19 @@
 #include "graphics/fonts/open_sans_regular_32_4bpp.h"
 #include "graphics/text_renderer.h"
 
-static aw9523b_t aw9523b_expander = {0};
-static axp2101_t axp2101_pmic = {0};
-static ft6x36_t ft6336 = {0};
+typedef struct {
+  aw9523b_t io_expander;
+  axp2101_t pmic;
+  ft6x36_t touch_screen;
+  cores3_display_t display;
+  cores3_board_t board;
+} app_t;
+
+static app_t app;
+
 static cores3_display_t board_display = {0};
 static display_surface_t app_surface = {0};
 static TaskHandle_t main_task_handle = NULL;
-
-static cores3_board_t cores3;
-
-static void release_handles(void) {
-  display_surface_deinit(&app_surface);
-  cores3_display_deinit(&board_display);
-  cores3_touch_deinit(&ft6336);
-  cores3_io_extender_deinit(&aw9523b_expander);
-}
-
-static int32_t axp2101_i2c_write(void *context,
-                                 const uint8_t *write_buffer,
-                                 size_t write_size) {
-  ii2c_device_handle_t device = (ii2c_device_handle_t)context;
-  if (device == NULL) {
-    return II2C_ERR_INVALID_ARG;
-  }
-
-  return ii2c_master_transmit(device, write_buffer, write_size);
-}
-
-static int32_t axp2101_i2c_write_read(void *context,
-                                      const uint8_t *write_buffer,
-                                      size_t write_size,
-                                      uint8_t *read_buffer,
-                                      size_t *read_size,
-                                      size_t read_capacity) {
-  ii2c_device_handle_t device = (ii2c_device_handle_t)context;
-  if (device == NULL || !read_buffer || !read_size) {
-    return II2C_ERR_INVALID_ARG;
-  }
-
-  int32_t err = ii2c_master_transmit_receive(
-      device, write_buffer, write_size, read_buffer, read_capacity);
-  if (err != II2C_ERR_NONE) {
-    return err;
-  }
-
-  *read_size = read_capacity;
-  return II2C_ERR_NONE;
-}
 
 static int32_t draw_rounded_button(display_surface_t *surface,
                                    bmf_font_view_t *font,
@@ -99,26 +64,20 @@ static int32_t draw_rounded_button(display_surface_t *surface,
 void app_main(void) {
   main_task_handle = xTaskGetCurrentTaskHandle();
 
-  int32_t err = cores3_board_init(&cores3);
+  int32_t err = cores3_board_init(&app.board);
   if (err != 0) {
     printf("Failed to initialize system I2C bus: %ld\n", (long)err);
     return;
   }
 
-  err = cores3_io_extender_init(cores3.i2c_aw9523b, &aw9523b_expander);
+  err = cores3_io_extender_init(app.board.i2c_aw9523b, &app.io_expander);
   if (err != 0) {
     printf("Failed to initialize AW9523B: %s\n", cores3_io_extender_err_to_name(err));
-    release_handles();
     return;
   }
 
-  axp2101_pmic.transport_context = cores3.i2c_axp2101;
-  axp2101_pmic.transport_write = axp2101_i2c_write;
-  axp2101_pmic.transport_write_read = axp2101_i2c_write_read;
-
-  err = cores3_power_mgmt_init(&aw9523b_expander, &axp2101_pmic);
+  err = cores3_power_mgmt_init(app.board.i2c_axp2101, &app.io_expander, &app.pmic);
   if (err != 0) {
-    release_handles();
     return;
   }
 
@@ -127,23 +86,20 @@ void app_main(void) {
     printf("Failed to setup I/O extender interrupt: %s (%ld)\n",
            cores3_io_extender_err_to_name(err),
            (long)err);
-    release_handles();
     return;
   }
 
-  err = cores3_touch_init(cores3.i2c_ft6336, &aw9523b_expander, &ft6336);
+  err = cores3_touch_init(app.board.i2c_ft6336, &app.io_expander, &app.touch_screen);
   if (err != FT6X36_ERR_NONE) {
     printf("Failed to configure the touch screen: %s (%ld)\n",
            cores3_touch_err_to_name(err),
            (long)err);
-    release_handles();
     return;
   }
 
-  err = cores3_display_init(&board_display, &aw9523b_expander);
+  err = cores3_display_init(&board_display, &app.io_expander);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to initialize CoreS3 display: %ld\n", (long)err);
-    release_handles();
     return;
   }
 
@@ -154,7 +110,6 @@ void app_main(void) {
                              cores3_display_max_transfer_bytes());
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to initialize display surface: %ld\n", (long)err);
-    release_handles();
     return;
   }
 
@@ -167,14 +122,12 @@ void app_main(void) {
       bmf_font_view_load_bytes(&font_view, open_sans_regular_32, open_sans_regular_32_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
-    release_handles();
     return;
   }
 
   err = graphics_fill_screen(&app_surface, background_color);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to fill the LCD background: %ld\n", (long)err);
-    release_handles();
     return;
   }
 
@@ -183,7 +136,6 @@ void app_main(void) {
   bmf_ret = bmf_font_view_load_bytes(&opensans_16, open_sans_regular_16, open_sans_regular_16_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
-    release_handles();
     return;
   }
 
@@ -205,7 +157,6 @@ void app_main(void) {
                            0xFFFF);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render status bar: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
     return;
   }
 
@@ -223,7 +174,6 @@ void app_main(void) {
                                    NULL);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render heap info: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
     return;
   }
 
@@ -257,7 +207,6 @@ void app_main(void) {
   }
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render bounded string: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
     return;
   }
 
@@ -277,7 +226,6 @@ void app_main(void) {
   if (err != ILI9342_ERR_NONE) {
     printf(
         "Failed to draw first button background: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
     return;
   }
 
@@ -294,7 +242,6 @@ void app_main(void) {
                                    NULL);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to draw first button label: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
     return;
   }
 
@@ -308,7 +255,6 @@ void app_main(void) {
   err = draw_rounded_button(&app_surface, &opensans_16, &another, "Also me", 0xFFFF, 0x0000);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to draw second button: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    release_handles();
     return;
   }
 
@@ -327,7 +273,7 @@ void app_main(void) {
     uint8_t input_value = 0;
 
     // clear touch interrupt from the I/O extender
-    err = aw9523b_port_input_read(&aw9523b_expander, 1, &input_value);
+    err = aw9523b_port_input_read(&app.io_expander, 1, &input_value);
     if (err != AW9523B_ERR_NONE) {
       ESP_LOGE("MAIN",
                "Failed to read AW9523B register for PORT1 input data: %s\n",
@@ -337,7 +283,7 @@ void app_main(void) {
 
     (void)input_value;
     ft6x36_touch_data_t out_touch;
-    err = ft6x36_touch_data_get(&ft6336, &out_touch);
+    err = ft6x36_touch_data_get(&app.touch_screen, &out_touch);
     if (err != FT6X36_ERR_NONE) {
       ESP_LOGE(
           "MAIN", "Failed to read the touch data: %s (%ld)", ft6x36_err_to_name(err), (long)err);
