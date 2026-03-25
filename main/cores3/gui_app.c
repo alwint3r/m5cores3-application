@@ -113,17 +113,28 @@ static void cores3_gui_layout_init(cores3_gui_app_t *gui) {
   };
 }
 
-static int32_t cores3_gui_render_status_bar(cores3_gui_app_t *gui) {
+static int32_t cores3_gui_fill_rect(display_surface_t *surface,
+                                    const graphics_rect_t *rect,
+                                    uint16_t color) {
+  if (surface == NULL || rect == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  return graphics_fill_rect(surface,
+                            (uint16_t)rect->x0,
+                            (uint16_t)rect->y0,
+                            (uint16_t)rect->x1,
+                            (uint16_t)rect->y1,
+                            color);
+}
+
+static int32_t cores3_gui_render_status_wifi(cores3_gui_app_t *gui) {
   if (gui == NULL || gui->surface == NULL) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = graphics_fill_rect(gui->surface,
-                                   (uint16_t)gui->status_bar_rect.x0,
-                                   (uint16_t)gui->status_bar_rect.y0,
-                                   (uint16_t)gui->status_bar_rect.x1,
-                                   (uint16_t)gui->status_bar_rect.y1,
-                                   CORES3_GUI_STATUS_BG_COLOR);
+  int32_t err =
+      cores3_gui_fill_rect(gui->surface, &gui->wifi_status_rect, CORES3_GUI_STATUS_BG_COLOR);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
@@ -149,6 +160,20 @@ static int32_t cores3_gui_render_status_bar(cores3_gui_app_t *gui) {
     return err;
   }
 
+  return ILI9342_ERR_NONE;
+}
+
+static int32_t cores3_gui_render_status_text(cores3_gui_app_t *gui) {
+  if (gui == NULL || gui->surface == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int32_t err =
+      cores3_gui_fill_rect(gui->surface, &gui->status_text_rect, CORES3_GUI_STATUS_BG_COLOR);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
   if (gui->status_text[0] == '\0') {
     return ILI9342_ERR_NONE;
   }
@@ -165,6 +190,25 @@ static int32_t cores3_gui_render_status_bar(cores3_gui_app_t *gui) {
                                     CORES3_GUI_STATUS_BG_COLOR,
                                     NULL,
                                     NULL);
+}
+
+static int32_t cores3_gui_render_status_bar(cores3_gui_app_t *gui) {
+  if (gui == NULL || gui->surface == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int32_t err =
+      cores3_gui_fill_rect(gui->surface, &gui->status_bar_rect, CORES3_GUI_STATUS_BG_COLOR);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  err = cores3_gui_render_status_wifi(gui);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  return cores3_gui_render_status_text(gui);
 }
 
 static int32_t cores3_gui_render_main_text_content(cores3_gui_app_t *gui) {
@@ -289,9 +333,34 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui, const char *text, b
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  cores3_gui_copy_string(gui->status_text, sizeof(gui->status_text), text);
+  char next_status_text[CORES3_GUI_APP_STATUS_TEXT_MAX_LEN] = {0};
+  cores3_gui_copy_string(next_status_text, sizeof(next_status_text), text);
+
+  bool text_changed = strcmp(gui->status_text, next_status_text) != 0;
+  bool wifi_changed = gui->wifi_connected != wifi_connected;
+  if (!text_changed && !wifi_changed) {
+    return ILI9342_ERR_NONE;
+  }
+
+  cores3_gui_copy_string(gui->status_text, sizeof(gui->status_text), next_status_text);
   gui->wifi_connected = wifi_connected;
-  return cores3_gui_render_status_bar(gui);
+
+  int32_t err = ILI9342_ERR_NONE;
+  if (wifi_changed) {
+    err = cores3_gui_render_status_wifi(gui);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+  }
+
+  if (text_changed) {
+    err = cores3_gui_render_status_text(gui);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+  }
+
+  return ILI9342_ERR_NONE;
 }
 
 void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,
