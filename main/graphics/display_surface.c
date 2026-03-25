@@ -4,49 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static inline void graphics_color_to_u8_array(uint8_t *dst, uint16_t color) {
-  dst[0] = (uint8_t)(color >> 8);
-  dst[1] = (uint8_t)(color & 0xFF);
-}
-
-static void graphics_fill_color_span(uint8_t *buffer, size_t pixel_count, uint16_t color) {
-  for (size_t i = 0; i < pixel_count; i++) {
-    graphics_color_to_u8_array(buffer + (i * 2U), color);
-  }
-}
+#include "graphics/render_support.h"
 
 static uint8_t n_to_m_bits(uint8_t data, uint8_t n, uint8_t m) {
   return (uint8_t)((data * ((1U << m) - 1U)) / ((1U << n) - 1U));
-}
-
-static int32_t graphics_write_buffer_chunked(display_surface_t *surface,
-                                             const uint8_t *buffer,
-                                             size_t len) {
-  if (surface == NULL || surface->panel == NULL || buffer == NULL || len == 0U) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  size_t chunk_bytes = surface->max_transfer_bytes;
-  if (chunk_bytes == 0U) {
-    chunk_bytes = len;
-  }
-
-  size_t offset = 0U;
-  while (offset < len) {
-    size_t bytes_this_round = len - offset;
-    if (bytes_this_round > chunk_bytes) {
-      bytes_this_round = chunk_bytes;
-    }
-
-    int32_t err = ili9342_write_data(surface->panel, buffer + offset, bytes_this_round);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-
-    offset += bytes_this_round;
-  }
-
-  return ILI9342_ERR_NONE;
 }
 
 int32_t display_surface_init(display_surface_t *surface,

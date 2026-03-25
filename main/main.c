@@ -113,21 +113,15 @@ void app_main(void) {
     return;
   }
 
-  uint16_t background_color = graphics_rgb888_to_rgb565(0, 0, 0);
-  uint16_t foreground_color = 0xFFFF;
+  uint16_t display_bg_color = 0xFFFF;
+  uint16_t text_color = 0x0000;
 
-  bmf_font_view_t font_view;
-  bmf_font_view_init(&font_view);
+  bmf_font_view_t opensans_32;
+  bmf_font_view_init(&opensans_32);
   bmf_status_t bmf_ret =
-      bmf_font_view_load_bytes(&font_view, open_sans_regular_32, open_sans_regular_32_len);
+      bmf_font_view_load_bytes(&opensans_32, open_sans_regular_32, open_sans_regular_32_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
-    return;
-  }
-
-  err = graphics_fill_screen(&app_surface, background_color);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Failed to fill the LCD background: %ld\n", (long)err);
     return;
   }
 
@@ -139,37 +133,50 @@ void app_main(void) {
     return;
   }
 
+  // set background color for the screen
+  err = graphics_fill_screen(&app_surface, display_bg_color);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed to fill the LCD background: %ld\n", (long)err);
+    return;
+  }
+
   char free_heap_str[64] = {0};
   snprintf(
       free_heap_str, sizeof(free_heap_str), "Heap: %lu B", (unsigned long)esp_get_free_heap_size());
-  graphics_rect_t status_bounding = {
-      .x0 = 10,
-      .y0 = (int16_t)(cores3_display_height() - 30U),
-      .x1 = (int16_t)(cores3_display_width() - 10U),
+
+  uint16_t status_bar_rect_height = 32;
+  graphics_rect_t status_bar_rect = {
+      .x0 = 0,
+      .y0 = (int16_t)(cores3_display_height() - status_bar_rect_height - 1),
+      .x1 = (int16_t)(cores3_display_width() - 1U),
       .y1 = (int16_t)(cores3_display_height() - 1U),
   };
 
+  int16_t status_bar_left_margin = 10;
+  uint16_t status_bar_rect_color = graphics_rgb888_to_rgb565(184, 224, 248);
+
   err = graphics_fill_rect(&app_surface,
-                           0U,
-                           (uint16_t)status_bounding.y0,
-                           (uint16_t)(cores3_display_width() - 1U),
-                           (uint16_t)(cores3_display_height() - 1U),
-                           0xFFFF);
+                           status_bar_rect.x0,
+                           status_bar_rect.y0,
+                           status_bar_rect.x1,
+                           status_bar_rect.y1,
+                           status_bar_rect_color);
+
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render status bar: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     return;
   }
 
-  int16_t x = status_bounding.x0;
-  int16_t y = (int16_t)(graphics_text_first_baseline_y(&opensans_16, &status_bounding) + 5);
+  int16_t x = status_bar_rect.x0 + status_bar_left_margin;
+  int16_t y = (int16_t)(graphics_text_first_baseline_y(&opensans_16, &status_bar_rect) + 5);
   err = graphics_draw_text_bounded(&app_surface,
                                    &opensans_16,
                                    free_heap_str,
                                    x,
                                    y,
-                                   &status_bounding,
-                                   0x0000,
-                                   0xFFFF,
+                                   &status_bar_rect,
+                                   text_color,
+                                   status_bar_rect_color,
                                    NULL,
                                    NULL);
   if (err != ILI9342_ERR_NONE) {
@@ -189,18 +196,10 @@ void app_main(void) {
       .y1 = (int16_t)(cores3_display_height() - 30U),
   };
   x = bounding.x0;
-  y = graphics_text_first_baseline_y(&font_view, &bounding);
+  y = graphics_text_first_baseline_y(&opensans_32, &bounding);
   for (size_t i = 0; i < strlen(msg2); i++) {
-    err = graphics_draw_char_bounded(&app_surface,
-                                     &font_view,
-                                     msg2[i],
-                                     x,
-                                     y,
-                                     &bounding,
-                                     foreground_color,
-                                     background_color,
-                                     &x,
-                                     &y);
+    err = graphics_draw_char_bounded(
+        &app_surface, &opensans_32, msg2[i], x, y, &bounding, text_color, display_bg_color, &x, &y);
     if (err != ILI9342_ERR_NONE) {
       break;
     }
