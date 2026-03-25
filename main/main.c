@@ -1,49 +1,33 @@
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <aw9523b/aw9523b.h>
-#include <aw9523b/aw9523b_register.h>
 #include <axp2101/axp2101.h>
 #include <ft6x36/ft6x36.h>
 #include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
-#include <ili9342/ili9342.h>
-#include <ispi/ispi.h>
 #include <driver/gpio.h>
-#include "graphics/fonts/open_sans_regular_32_4bpp.h"
-#include "graphics/fonts/open_sans_regular_16_4bpp.h"
-#include "graphics/bmf_reader.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <esp_timer.h>
-#include <esp_system.h>
 #include <esp_log.h>
+#include <esp_system.h>
+
+#include "display/cores3_display.h"
+#include "graphics/bmf_reader.h"
+#include "graphics/display_surface.h"
+#include "graphics/fonts/open_sans_regular_16_4bpp.h"
+#include "graphics/fonts/open_sans_regular_32_4bpp.h"
+#include "graphics/text_renderer.h"
 #include "power_mgmt.h"
 
 static const int32_t SYS_I2C_SDA = 12;
 static const int32_t SYS_I2C_SCL = 11;
-static const int32_t LCD_SPI_MOSI = 37;
-static const int32_t LCD_SPI_SCK = 36;
-static const int32_t LCD_SPI_CS = 3;
-static const int32_t LCD_SPI_DC = 35;
-
-static const uint16_t LCD_WIDTH = 320;
-static const uint16_t LCD_HEIGHT = 240;
-enum {
-  LCD_ROW_BUFFER_BYTES = 320 * 2,
-  LCD_SPI_MAX_TRANSFER_BYTES = 320 * 2,
-};
-static uint8_t LCD_ROW_BUFFER[320 * 2] = {0};
 
 static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
 static const uint16_t CORES3_FT6336_I2C_ADDRESS = 0x38;
-static const uint8_t CORES3_AW9523B_LCD_RST_PORT = 1;
-static const uint8_t CORES3_AW9523B_LCD_RST_PIN = 1;
 
 static const uint8_t CORES3_AW9523B_TOUCH_INT_PORT = 1;
 static const uint8_t CORES3_AW9523B_TOUCH_INT_PIN = 2;
@@ -54,33 +38,13 @@ static const int CORES3_I2C_INT_PIN = 21;
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b_i2c = NULL;
 static ii2c_device_handle_t axp2101_i2c = NULL;
-static ispi_master_bus_handle_t lcd_spi = NULL;
-static ispi_device_handle_t lcd = NULL;
 static ii2c_device_handle_t ft6336_i2c = NULL;
-static bool lcd_dc_gpio_configured = false;
 static aw9523b_t aw9523b_expander = {0};
 static axp2101_t axp2101_pmic = {0};
 static ft6x36_t ft6336;
-
-typedef struct {
-  const uint8_t *bitmap;
-  int draw_x;
-  int draw_y;
-  int draw_y1;
-  int width;
-  int height;
-  int stride;
-} lcd_prepared_glyph_t;
-
-typedef struct rect_area rect_area_t;
-struct rect_area {
-  int16_t x0;
-  int16_t y0;
-  int16_t x1;
-  int16_t y1;
-};
-
-static int32_t lcd_write_buffer_chunked(ili9342_t *display, const uint8_t *buffer, size_t len);
+static cores3_display_t board_display = {0};
+static display_surface_t app_surface = {0};
+static TaskHandle_t main_task_handle = NULL;
 
 static const char *touch_err_to_name(int32_t err) {
   if (err >= FT6X36_ERR_BASE && err < (FT6X36_ERR_BASE + 0x100)) {
@@ -102,10 +66,8 @@ static const char *aw9523b_err_or_transport_to_name(int32_t err) {
 }
 
 static void release_handles(void) {
-  if (lcd_dc_gpio_configured) {
-    (void)igpio_reset_pin(LCD_SPI_DC);
-    lcd_dc_gpio_configured = false;
-  }
+  display_surface_deinit(&app_surface);
+  cores3_display_deinit(&board_display);
 
   if (aw9523b_i2c != NULL) {
     (void)ii2c_del_device(aw9523b_i2c);
@@ -125,1157 +87,13 @@ static void release_handles(void) {
     (void)ii2c_del_device(ft6336_i2c);
     ft6336_i2c = NULL;
   }
+  ft6336.transport_write = NULL;
+  ft6336.transport_write_read = NULL;
 
   if (sys_i2c != NULL) {
     (void)ii2c_del_master_bus(sys_i2c);
     sys_i2c = NULL;
   }
-}
-
-static int32_t configure_lcd_dc_gpio(void) {
-  igpio_config_t config;
-  igpio_get_default_config(&config);
-
-  config.io_num = LCD_SPI_DC;
-  config.mode = IGPIO_MODE_OUTPUT;
-  config.pull_mode = IGPIO_PULL_FLOATING;
-  config.intr_type = IGPIO_INTR_DISABLED;
-
-  int32_t err = igpio_configure(&config);
-  if (err != IGPIO_ERR_NONE) {
-    return err;
-  }
-
-  lcd_dc_gpio_configured = true;
-
-  err = igpio_set_level(LCD_SPI_DC, false);
-  if (err != IGPIO_ERR_NONE) {
-    return err;
-  }
-
-  bool level = true;
-  err = igpio_get_level(LCD_SPI_DC, &level);
-  if (err != IGPIO_ERR_NONE) {
-    return err;
-  }
-
-  if (level) {
-    return IGPIO_ERR_INVALID_STATE;
-  }
-
-  puts("LCD DC GPIO configured on GPIO35 and verified low");
-  return IGPIO_ERR_NONE;
-}
-
-static void delay_ms(uint32_t ms) {
-  vTaskDelay(pdMS_TO_TICKS(ms));
-}
-
-static int32_t lcd_write_bytes(bool is_data, const uint8_t *bytes, size_t len) {
-  if (bytes == NULL || len == 0) {
-    return ISPI_ERR_INVALID_ARG;
-  }
-
-  int32_t err = igpio_set_level(LCD_SPI_DC, is_data);
-  if (err != IGPIO_ERR_NONE) {
-    return err;
-  }
-
-  ispi_transaction_t trans;
-  ispi_get_default_transaction(&trans);
-  trans.tx_buffer = bytes;
-  trans.tx_size = len;
-
-  return ispi_device_transfer(lcd, &trans);
-}
-
-static int32_t lcd_write_command(uint8_t cmd) {
-  return lcd_write_bytes(false, &cmd, 1);
-}
-
-static int32_t lcd_write_data(const uint8_t *bytes, size_t len) {
-  return lcd_write_bytes(true, bytes, len);
-}
-
-static int32_t lcd_hard_reset(void) {
-  int32_t err = aw9523b_level_set(
-      &aw9523b_expander, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 0);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-
-  delay_ms(20);
-
-  err = aw9523b_level_set(
-      &aw9523b_expander, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-
-  delay_ms(120);
-  puts("LCD hard reset complete");
-  return AW9523B_ERR_NONE;
-}
-
-static inline void lcd_color_to_u8_array(uint8_t *dst, uint16_t color) {
-  dst[0] = (uint8_t)(color >> 8);
-  dst[1] = (uint8_t)(color & 0xFF);
-}
-
-static void lcd_fill_color_span(uint8_t *buffer, size_t pixel_count, uint16_t color) {
-  for (size_t i = 0; i < pixel_count; i++) {
-    lcd_color_to_u8_array(buffer + (i * 2U), color);
-  }
-}
-
-static int32_t lcd_fill_rect(ili9342_t *display,
-                             uint16_t x0,
-                             uint16_t y0,
-                             uint16_t x1,
-                             uint16_t y1,
-                             uint16_t color) {
-  if (display == NULL || x1 < x0 || y1 < y0 || x1 >= LCD_WIDTH || y1 >= LCD_HEIGHT) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  size_t row_pixels = (size_t)(x1 - x0 + 1U);
-  size_t row_bytes = row_pixels * 2U;
-  if (row_bytes == 0U || row_bytes > LCD_ROW_BUFFER_BYTES) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  lcd_fill_color_span(LCD_ROW_BUFFER, row_pixels, color);
-
-  int32_t err = ili9342_address_window_set(display, x0, y0, x1, y1);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  size_t row_count = (size_t)(y1 - y0 + 1U);
-  for (size_t row = 0; row < row_count; row++) {
-    err = lcd_write_buffer_chunked(display, LCD_ROW_BUFFER, row_bytes);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-  }
-
-  return ILI9342_ERR_NONE;
-}
-
-static int32_t lcd_fill_round_rect_r6_top(ili9342_t *display,
-                                          const rect_area_t *bounds,
-                                          uint16_t color) {
-  if (!display || !bounds) {
-    printf("Dang it son\n");
-    return ILI9342_ERR_INVALID_ARG;
-  }
-  static const uint8_t inset[6] = {4, 3, 2, 1, 1, 0};
-
-  // we fill the middle
-  int32_t err = lcd_fill_rect(display, bounds->x0, bounds->y0 + 6, bounds->x1, bounds->y1, color);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Dang it 2 son\n");
-
-    return err;
-  }
-
-  for (uint16_t dy = 0; dy < 6; ++dy) {
-    uint16_t dx = inset[dy];
-    err = lcd_fill_rect(
-        display, bounds->x0 + dx, bounds->y0 + dy, bounds->x1 - dx, bounds->y0 + dy, color);
-    if (err != ILI9342_ERR_NONE) {
-      printf("Dang it 3 son\n");
-
-      return err;
-    }
-  }
-
-  return ILI9342_ERR_NONE;
-}
-
-static int32_t lcd_fill_round_rect_r6(ili9342_t *display,
-                                      uint16_t x0,
-                                      uint16_t y0,
-                                      uint16_t x1,
-                                      uint16_t y1,
-                                      uint16_t color) {
-  // how do we compute this?
-  // all I know, 3, 2, 1 are factors of 6
-  // but, the leftmost are the top or bottom
-  // and the rightmost is the middle of the button
-  static const uint8_t inset[6] = {3, 2, 1, 1, 0, 0};
-  int32_t err = lcd_fill_rect(display, x0, y0 + 6, x1, y1 - 6, color);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  for (uint16_t dy = 0; dy < 6; ++dy) {
-    uint16_t dx = inset[dy];
-    err = lcd_fill_rect(display, x0 + dx, y0 + dy, x1 - dx, y0 + dy, color);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-
-    err = lcd_fill_rect(display, x0 + dx, y1 - dy, x1 - dx, y1 - dy, color);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-  }
-
-  return ILI9342_ERR_NONE;
-}
-
-static int32_t lcd_fill_screen(ili9342_t *display, uint16_t color) {
-  int32_t err = lcd_fill_rect(display, 0U, 0U, LCD_WIDTH - 1U, LCD_HEIGHT - 1U, color);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  puts("LCD display memory fill complete");
-  return ILI9342_ERR_NONE;
-}
-
-static bool rect_area_is_valid_for_lcd(const rect_area_t *area) {
-  if (area == NULL) {
-    return false;
-  }
-
-  return area->x0 >= 0 && area->y0 >= 0 && area->x1 >= area->x0 && area->y1 >= area->y0 &&
-         area->x1 < LCD_WIDTH && area->y1 < LCD_HEIGHT;
-}
-
-static bool rect_area_clip_to_bounds(const rect_area_t *bounds,
-                                     int32_t x0,
-                                     int32_t y0,
-                                     int32_t x1,
-                                     int32_t y1,
-                                     rect_area_t *clipped) {
-  if (bounds == NULL || clipped == NULL || x1 < x0 || y1 < y0) {
-    return false;
-  }
-
-  if (x0 > bounds->x1 || x1 < bounds->x0 || y0 > bounds->y1 || y1 < bounds->y0) {
-    return false;
-  }
-
-  clipped->x0 = (int16_t)(x0 < bounds->x0 ? bounds->x0 : x0);
-  clipped->y0 = (int16_t)(y0 < bounds->y0 ? bounds->y0 : y0);
-  clipped->x1 = (int16_t)(x1 > bounds->x1 ? bounds->x1 : x1);
-  clipped->y1 = (int16_t)(y1 > bounds->y1 ? bounds->y1 : y1);
-  return true;
-}
-
-static void rect_area_include(rect_area_t *dst, const rect_area_t *src) {
-  if (dst == NULL || src == NULL) {
-    return;
-  }
-
-  if (src->x0 < dst->x0) {
-    dst->x0 = src->x0;
-  }
-  if (src->y0 < dst->y0) {
-    dst->y0 = src->y0;
-  }
-  if (src->x1 > dst->x1) {
-    dst->x1 = src->x1;
-  }
-  if (src->y1 > dst->y1) {
-    dst->y1 = src->y1;
-  }
-}
-
-static int16_t lcd_text_first_baseline_y(const bmf_font_view_t *font, const rect_area_t *bounding) {
-  int16_t first_line_y = bounding->y0;
-  if (font->ascent > 0) {
-    first_line_y = (int16_t)(bounding->y0 + font->ascent);
-  } else if (font->line_height > 0U) {
-    first_line_y = (int16_t)(bounding->y0 + (int16_t)font->line_height - 1);
-  }
-
-  if (first_line_y > bounding->y1) {
-    first_line_y = bounding->y1;
-  }
-
-  return first_line_y;
-}
-
-static int32_t lcd_clear_text_line(ili9342_t *display,
-                                   const bmf_font_view_t *font,
-                                   const rect_area_t *bounding,
-                                   int16_t baseline_y,
-                                   uint16_t background_color) {
-  if (display == NULL || font == NULL || bounding == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (!rect_area_is_valid_for_lcd(bounding)) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  int32_t line_y0 = 0;
-  if (font->ascent > 0) {
-    line_y0 = (int32_t)baseline_y - font->ascent;
-  } else if (font->line_height > 0U) {
-    line_y0 = (int32_t)baseline_y - (int32_t)font->line_height + 1;
-  } else {
-    line_y0 = baseline_y;
-  }
-
-  int32_t line_y1 = line_y0;
-  if (font->line_height > 0U) {
-    line_y1 = line_y0 + (int32_t)font->line_height - 1;
-  }
-
-  if (line_y1 < bounding->y0 || line_y0 > bounding->y1) {
-    return ILI9342_ERR_NONE;
-  }
-
-  if (line_y0 < bounding->y0) {
-    line_y0 = bounding->y0;
-  }
-  if (line_y1 > bounding->y1) {
-    line_y1 = bounding->y1;
-  }
-  if (line_y0 > line_y1) {
-    return ILI9342_ERR_NONE;
-  }
-
-  return lcd_fill_rect(display,
-                       (uint16_t)bounding->x0,
-                       (uint16_t)line_y0,
-                       (uint16_t)bounding->x1,
-                       (uint16_t)line_y1,
-                       background_color);
-}
-
-inline uint8_t n_to_m_bits(uint8_t data, uint8_t n, uint8_t m) {
-  return (data * ((1 << m) - 1)) / ((1 << n) - 1);
-}
-
-static uint16_t rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t r5 = n_to_m_bits(r, 8, 5);
-  uint8_t g6 = n_to_m_bits(g, 8, 6);
-  uint8_t b5 = n_to_m_bits(b, 8, 5);
-
-  return (uint16_t)(r5 << 11) | (uint16_t)(g6 << 5) | (uint16_t)b5;
-}
-
-static __attribute__((unused)) int32_t
-lcd_fill_buffer_rgb888(uint8_t *buffer, size_t buffer_len, uint8_t r, uint8_t g, uint8_t b) {
-  if (buffer == NULL || (buffer_len % 2U) != 0U) {
-    return ISPI_ERR_INVALID_ARG;
-  }
-
-  uint16_t color = rgb888_to_rgb565(r, g, b);
-
-  lcd_fill_color_span(buffer, buffer_len / 2U, color);
-
-  return ISPI_ERR_NONE;
-}
-
-static __attribute__((unused)) int32_t lcd_buffer_set_pixel_rgb565(uint8_t *buffer,
-                                                                   uint16_t buffer_width,
-                                                                   uint16_t buffer_height,
-                                                                   uint16_t x,
-                                                                   uint16_t y,
-                                                                   uint16_t color) {
-  if (buffer == NULL) {
-    return ISPI_ERR_INVALID_ARG;
-  }
-
-  if (x >= buffer_width || y >= buffer_height) {
-    return ISPI_ERR_INVALID_ARG;
-  }
-
-  size_t pixel_index = ((size_t)y * (size_t)buffer_width) + (size_t)x;
-  size_t byte_index = pixel_index * 2U;
-  lcd_color_to_u8_array(buffer + byte_index, color);
-  return ISPI_ERR_NONE;
-}
-
-static int32_t lcd_write_buffer_chunked(ili9342_t *display, const uint8_t *buffer, size_t len) {
-  if (display == NULL || buffer == NULL || len == 0U) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  size_t offset = 0U;
-  while (offset < len) {
-    size_t bytes_this_round = len - offset;
-    if (bytes_this_round > LCD_SPI_MAX_TRANSFER_BYTES) {
-      bytes_this_round = LCD_SPI_MAX_TRANSFER_BYTES;
-    }
-    int32_t err = ili9342_write_data(display, buffer + offset, bytes_this_round);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-
-    offset += bytes_this_round;
-  }
-
-  return ISPI_ERR_NONE;
-}
-
-static uint16_t blend_rgb565(uint16_t bg, uint16_t fg, uint8_t coverage) {
-  uint32_t bg_r = (bg >> 11) & 0x1F;
-  uint32_t bg_g = (bg >> 5) & 0x3F;
-  uint32_t bg_b = bg & 0x1F;
-
-  uint32_t fg_r = (fg >> 11) & 0x1F;
-  uint32_t fg_g = (fg >> 5) & 0x3F;
-  uint32_t fg_b = fg & 0x1F;
-
-  uint32_t inv = 255U - coverage;
-  uint32_t out_r = (fg_r * coverage + bg_r * inv + 127U) / 255U;
-  uint32_t out_g = (fg_g * coverage + bg_g * inv + 127U) / 255U;
-  uint32_t out_b = (fg_b * coverage + bg_b * inv + 127U) / 255U;
-
-  return (uint16_t)((out_r << 11) | (out_g << 5) | out_b);
-}
-
-static int32_t lcd_glyph_stride_get(const bmf_font_view_t *font_view, int width, int *stride) {
-  if (font_view == NULL || stride == NULL || width <= 0) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (font_view->bpp == BMF_BPP_MONO) {
-    *stride = (width + 7) / 8;
-    return ILI9342_ERR_NONE;
-  }
-
-  if (font_view->bpp == BMF_BPP_GRAY4) {
-    *stride = (width + 1) / 2;
-    return ILI9342_ERR_NONE;
-  }
-
-  if (font_view->bpp == BMF_BPP_GRAY8) {
-    *stride = width;
-    return ILI9342_ERR_NONE;
-  }
-
-  return ILI9342_ERR_INVALID_ARG;
-}
-
-static int32_t lcd_prepared_glyph_load(bmf_font_view_t *font_view,
-                                       const bmf_glyph_record_t *glyph,
-                                       lcd_prepared_glyph_t *prepared) {
-  if (font_view == NULL || glyph == NULL || prepared == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  memset(prepared, 0, sizeof(*prepared));
-
-  int width = 0;
-  int height = 0;
-  prepared->bitmap = bmf_font_view_get_glyph_bitmap(font_view, glyph, &width, &height);
-  prepared->width = width;
-  prepared->height = height;
-  if (prepared->bitmap == NULL || width <= 0 || height <= 0) {
-    return ILI9342_ERR_NONE;
-  }
-
-  return lcd_glyph_stride_get(font_view, width, &prepared->stride);
-}
-
-static void lcd_prepared_glyph_position_set(lcd_prepared_glyph_t *prepared,
-                                            int draw_x,
-                                            int draw_y) {
-  prepared->draw_x = draw_x;
-  prepared->draw_y = draw_y;
-  prepared->draw_y1 = draw_y + prepared->height - 1;
-}
-
-static bool lcd_prepared_glyph_has_bitmap(const lcd_prepared_glyph_t *prepared) {
-  return prepared != NULL && prepared->bitmap != NULL && prepared->width > 0 &&
-         prepared->height > 0;
-}
-
-static int32_t lcd_prepared_glyph_coverage_get(const bmf_font_view_t *font_view,
-                                               const lcd_prepared_glyph_t *prepared,
-                                               int src_x,
-                                               int src_y,
-                                               uint8_t *coverage) {
-  if (font_view == NULL || prepared == NULL || coverage == NULL ||
-      !lcd_prepared_glyph_has_bitmap(prepared) || src_x < 0 || src_y < 0 ||
-      src_x >= prepared->width || src_y >= prepared->height) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (font_view->bpp == BMF_BPP_MONO) {
-    int byte_idx = src_y * prepared->stride + src_x / 8;
-    int bit_idx = 7 - (src_x % 8);
-    uint8_t byte = prepared->bitmap[byte_idx];
-    *coverage = ((byte >> bit_idx) & 1U) != 0U ? 255U : 0U;
-    return ILI9342_ERR_NONE;
-  }
-
-  if (font_view->bpp == BMF_BPP_GRAY4) {
-    int byte_idx = src_y * prepared->stride + src_x / 2;
-    uint8_t byte = prepared->bitmap[byte_idx];
-    uint8_t gray4 = (src_x % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
-    *coverage = (uint8_t)((gray4 << 4) | gray4);
-    return ILI9342_ERR_NONE;
-  }
-
-  if (font_view->bpp == BMF_BPP_GRAY8) {
-    *coverage = prepared->bitmap[src_y * prepared->stride + src_x];
-    return ILI9342_ERR_NONE;
-  }
-
-  return ILI9342_ERR_INVALID_ARG;
-}
-
-static uint16_t lcd_color_from_coverage(uint16_t background_color,
-                                        uint16_t foreground_color,
-                                        uint8_t coverage) {
-  if (coverage == 0U) {
-    return background_color;
-  }
-
-  if (coverage == 255U) {
-    return foreground_color;
-  }
-
-  return blend_rgb565(background_color, foreground_color, coverage);
-}
-
-static int32_t lcd_render_prepared_glyph_row(uint8_t *row_buffer,
-                                             int row_origin_x,
-                                             int dst_y,
-                                             const bmf_font_view_t *font_view,
-                                             const lcd_prepared_glyph_t *prepared,
-                                             int clip_x0,
-                                             int clip_x1,
-                                             uint16_t background_color,
-                                             uint16_t foreground_color) {
-  if (row_buffer == NULL || font_view == NULL || prepared == NULL || clip_x1 < clip_x0) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (dst_y < prepared->draw_y || dst_y > prepared->draw_y1) {
-    return ILI9342_ERR_NONE;
-  }
-
-  int src_y = dst_y - prepared->draw_y;
-  for (int dst_x = clip_x0; dst_x <= clip_x1; dst_x++) {
-    int src_x = dst_x - prepared->draw_x;
-    uint8_t coverage = 0U;
-    int32_t err = lcd_prepared_glyph_coverage_get(font_view, prepared, src_x, src_y, &coverage);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-
-    if (coverage == 0U) {
-      continue;
-    }
-
-    size_t row_offset = (size_t)(dst_x - row_origin_x) * 2U;
-    lcd_color_to_u8_array(row_buffer + row_offset,
-                          lcd_color_from_coverage(background_color, foreground_color, coverage));
-  }
-
-  return ILI9342_ERR_NONE;
-}
-
-static int32_t lcd_render_prepared_glyphs(ili9342_t *display,
-                                          const bmf_font_view_t *font_view,
-                                          const lcd_prepared_glyph_t *prepared_glyphs,
-                                          size_t prepared_glyph_count,
-                                          const rect_area_t *clip,
-                                          uint16_t background_color,
-                                          uint16_t foreground_color) {
-  if (display == NULL || font_view == NULL || prepared_glyphs == NULL || clip == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (!rect_area_is_valid_for_lcd(clip)) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  size_t row_pixels = (size_t)(clip->x1 - clip->x0 + 1);
-  size_t row_bytes = row_pixels * 2U;
-  if (row_bytes == 0U || row_bytes > LCD_ROW_BUFFER_BYTES) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  int32_t err = ili9342_address_window_set(
-      display, (uint16_t)clip->x0, (uint16_t)clip->y0, (uint16_t)clip->x1, (uint16_t)clip->y1);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  for (int dst_y = clip->y0; dst_y <= clip->y1; dst_y++) {
-    lcd_fill_color_span(LCD_ROW_BUFFER, row_pixels, background_color);
-
-    for (size_t i = 0; i < prepared_glyph_count; i++) {
-      const lcd_prepared_glyph_t *prepared = &prepared_glyphs[i];
-      if (!lcd_prepared_glyph_has_bitmap(prepared) || dst_y < prepared->draw_y ||
-          dst_y > prepared->draw_y1) {
-        continue;
-      }
-
-      int clip_x0 = prepared->draw_x < clip->x0 ? clip->x0 : prepared->draw_x;
-      int clip_x1 = prepared->draw_x + prepared->width - 1;
-      if (clip_x1 > clip->x1) {
-        clip_x1 = clip->x1;
-      }
-
-      if (clip_x0 > clip_x1) {
-        continue;
-      }
-
-      err = lcd_render_prepared_glyph_row(LCD_ROW_BUFFER,
-                                          clip->x0,
-                                          dst_y,
-                                          font_view,
-                                          prepared,
-                                          clip_x0,
-                                          clip_x1,
-                                          background_color,
-                                          foreground_color);
-      if (err != ILI9342_ERR_NONE) {
-        return err;
-      }
-    }
-
-    err = lcd_write_buffer_chunked(display, LCD_ROW_BUFFER, row_bytes);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-  }
-
-  return ILI9342_ERR_NONE;
-}
-
-static int32_t lcd_flush_prepared_glyph_run(ili9342_t *display,
-                                            bmf_font_view_t *font_view,
-                                            const lcd_prepared_glyph_t *prepared_glyphs,
-                                            size_t prepared_glyph_count,
-                                            bool has_visible_pixels,
-                                            const rect_area_t *clip,
-                                            uint16_t background_color,
-                                            uint16_t foreground_color) {
-  if (prepared_glyph_count == 0U || !has_visible_pixels) {
-    return ILI9342_ERR_NONE;
-  }
-
-  return lcd_render_prepared_glyphs(display,
-                                    font_view,
-                                    prepared_glyphs,
-                                    prepared_glyph_count,
-                                    clip,
-                                    background_color,
-                                    foreground_color);
-}
-
-static int32_t lcd_wrap_pen_to_next_line(ili9342_t *display,
-                                         const bmf_font_view_t *font,
-                                         const rect_area_t *bounding,
-                                         int16_t first_line_y,
-                                         uint16_t background_color,
-                                         int16_t *pen_x,
-                                         int16_t *pen_y) {
-  if (display == NULL || font == NULL || bounding == NULL || pen_x == NULL || pen_y == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  *pen_x = bounding->x0;
-  *pen_y = (int16_t)(*pen_y + (int16_t)font->line_height);
-  if (*pen_y > bounding->y1) {
-    *pen_y = first_line_y;
-  }
-
-  return lcd_clear_text_line(display, font, bounding, *pen_y, background_color);
-}
-
-static int32_t lcd_reset_pen_to_first_line(ili9342_t *display,
-                                           const bmf_font_view_t *font,
-                                           const rect_area_t *bounding,
-                                           int16_t first_line_y,
-                                           uint16_t background_color,
-                                           int16_t *pen_x,
-                                           int16_t *pen_y) {
-  if (display == NULL || font == NULL || bounding == NULL || pen_x == NULL || pen_y == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  *pen_x = bounding->x0;
-  *pen_y = first_line_y;
-
-  return lcd_clear_text_line(display, font, bounding, *pen_y, background_color);
-}
-
-static int32_t lcd_prepare_glyph_run(uint16_t screen_width,
-                                     uint16_t screen_height,
-                                     const char *text,
-                                     uint16_t x,
-                                     uint16_t y,
-                                     bmf_font_view_t *font_view,
-                                     lcd_prepared_glyph_t *prepared_glyphs,
-                                     size_t prepared_capacity,
-                                     size_t *visible_glyph_count,
-                                     int *text_clip_x0,
-                                     int *text_clip_y0,
-                                     int *text_clip_x1,
-                                     int *text_clip_y1) {
-  if (text == NULL || font_view == NULL || prepared_glyphs == NULL || visible_glyph_count == NULL ||
-      text_clip_x0 == NULL || text_clip_y0 == NULL || text_clip_x1 == NULL ||
-      text_clip_y1 == NULL || screen_width == 0U || screen_height == 0U ||
-      screen_width > LCD_WIDTH) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  size_t text_length = strlen(text);
-  if (text_length > prepared_capacity) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  bool has_visible_pixels = false;
-  size_t prepared_count = 0U;
-  int baseline_y = y;
-  int pen_x = x;
-  rect_area_t screen_bounds = {
-      .x0 = 0,
-      .y0 = 0,
-      .x1 = (int16_t)(screen_width - 1U),
-      .y1 = (int16_t)(screen_height - 1U),
-  };
-
-  for (size_t i = 0; i < text_length; i++) {
-    bmf_glyph_record_t glyph;
-
-    uint32_t codepoint = (uint8_t)text[i];
-    bmf_status_t glyph_status = bmf_font_view_find_glyph_binary(font_view, codepoint, &glyph, NULL);
-    if (glyph_status != BMF_STATUS_OK) {
-      return ISPI_ERR_FAIL;
-    }
-
-    lcd_prepared_glyph_t glyph_state;
-    int32_t err = lcd_prepared_glyph_load(font_view, &glyph, &glyph_state);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
-
-    if (!lcd_prepared_glyph_has_bitmap(&glyph_state)) {
-      pen_x += glyph.x_advance;
-      continue;
-    }
-
-    int draw_x = pen_x + glyph.x_offset;
-    int draw_y = baseline_y + glyph.y_offset;
-    lcd_prepared_glyph_position_set(&glyph_state, draw_x, draw_y);
-
-    rect_area_t clipped;
-    if (!rect_area_clip_to_bounds(&screen_bounds,
-                                  glyph_state.draw_x,
-                                  glyph_state.draw_y,
-                                  glyph_state.draw_x + glyph_state.width - 1,
-                                  glyph_state.draw_y1,
-                                  &clipped)) {
-      pen_x += glyph.x_advance;
-      continue;
-    }
-
-    lcd_prepared_glyph_t *prepared = &prepared_glyphs[prepared_count++];
-    *prepared = glyph_state;
-
-    if (!has_visible_pixels) {
-      *text_clip_x0 = clipped.x0;
-      *text_clip_y0 = clipped.y0;
-      *text_clip_x1 = clipped.x1;
-      *text_clip_y1 = clipped.y1;
-      has_visible_pixels = true;
-    } else {
-      if (clipped.x0 < *text_clip_x0) {
-        *text_clip_x0 = clipped.x0;
-      }
-      if (clipped.y0 < *text_clip_y0) {
-        *text_clip_y0 = clipped.y0;
-      }
-      if (clipped.x1 > *text_clip_x1) {
-        *text_clip_x1 = clipped.x1;
-      }
-      if (clipped.y1 > *text_clip_y1) {
-        *text_clip_y1 = clipped.y1;
-      }
-    }
-
-    pen_x += glyph.x_advance;
-  }
-
-  *visible_glyph_count = prepared_count;
-  return ILI9342_ERR_NONE;
-}
-
-static __attribute__((unused)) int32_t lcd_render_c_str_direct(uint16_t screen_width,
-                                                               uint16_t screen_height,
-                                                               const char *text,
-                                                               uint16_t x,
-                                                               uint16_t y,
-                                                               uint16_t background_color,
-                                                               uint16_t foreground_color,
-                                                               bmf_font_view_t *font_view,
-                                                               ili9342_t *display) {
-  if (display == NULL || text == NULL || font_view == NULL || screen_width == 0U ||
-      screen_height == 0U || screen_width > LCD_WIDTH) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  size_t text_length = strlen(text);
-  if (text_length == 0U) {
-    return ISPI_ERR_NONE;
-  }
-
-  lcd_prepared_glyph_t *prepared_glyphs = calloc(text_length, sizeof(*prepared_glyphs));
-  if (prepared_glyphs == NULL) {
-    return ILI9342_ERR_NO_MEM;
-  }
-
-  int text_clip_x0 = 0;
-  int text_clip_y0 = 0;
-  int text_clip_x1 = 0;
-  int text_clip_y1 = 0;
-  size_t visible_glyph_count = 0U;
-  int32_t err = lcd_prepare_glyph_run(screen_width,
-                                      screen_height,
-                                      text,
-                                      x,
-                                      y,
-                                      font_view,
-                                      prepared_glyphs,
-                                      text_length,
-                                      &visible_glyph_count,
-                                      &text_clip_x0,
-                                      &text_clip_y0,
-                                      &text_clip_x1,
-                                      &text_clip_y1);
-  if (err != ILI9342_ERR_NONE) {
-    free(prepared_glyphs);
-    return err;
-  }
-
-  if (visible_glyph_count == 0U) {
-    free(prepared_glyphs);
-    return ISPI_ERR_NONE;
-  }
-
-  rect_area_t text_clip = {
-      .x0 = (int16_t)text_clip_x0,
-      .y0 = (int16_t)text_clip_y0,
-      .x1 = (int16_t)text_clip_x1,
-      .y1 = (int16_t)text_clip_y1,
-  };
-  err = lcd_render_prepared_glyphs(display,
-                                   font_view,
-                                   prepared_glyphs,
-                                   visible_glyph_count,
-                                   &text_clip,
-                                   background_color,
-                                   foreground_color);
-  if (err != ILI9342_ERR_NONE) {
-    free(prepared_glyphs);
-    return err;
-  }
-
-  free(prepared_glyphs);
-  return ISPI_ERR_NONE;
-}
-
-static int32_t lcd_render_char_array_bounded(ili9342_t *display,
-                                             bmf_font_view_t *font,
-                                             const char *text,
-                                             size_t text_length,
-                                             int16_t x,
-                                             int16_t y,
-                                             const rect_area_t *bounding,
-                                             uint16_t foreground_color,
-                                             uint16_t background_color,
-                                             int16_t *next_x,
-                                             int16_t *next_y) {
-  if (display == NULL || font == NULL || text == NULL || bounding == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  if (!rect_area_is_valid_for_lcd(bounding)) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  int16_t first_line_y = lcd_text_first_baseline_y(font, bounding);
-
-  int16_t pen_x = x;
-  int16_t pen_y = y;
-  if (pen_x < bounding->x0 || pen_x > bounding->x1) {
-    pen_x = bounding->x0;
-  }
-  if (pen_y < first_line_y || pen_y > bounding->y1) {
-    pen_y = first_line_y;
-  }
-
-  if (text_length == 0U) {
-    if (next_x != NULL) {
-      *next_x = pen_x;
-    }
-    if (next_y != NULL) {
-      *next_y = pen_y;
-    }
-
-    return ILI9342_ERR_NONE;
-  }
-
-  lcd_prepared_glyph_t *prepared_glyphs = calloc(text_length, sizeof(*prepared_glyphs));
-  if (prepared_glyphs == NULL) {
-    return ILI9342_ERR_NO_MEM;
-  }
-
-  size_t prepared_count = 0U;
-  bool has_visible_pixels = false;
-  rect_area_t line_clip = {0};
-
-  for (size_t i = 0; i < text_length; i++) {
-    char c = text[i];
-
-    if (c == '\n') {
-      int32_t err = lcd_flush_prepared_glyph_run(display,
-                                                 font,
-                                                 prepared_glyphs,
-                                                 prepared_count,
-                                                 has_visible_pixels,
-                                                 &line_clip,
-                                                 background_color,
-                                                 foreground_color);
-      if (err != ILI9342_ERR_NONE) {
-        free(prepared_glyphs);
-        return err;
-      }
-
-      prepared_count = 0U;
-      has_visible_pixels = false;
-
-      err = lcd_wrap_pen_to_next_line(
-          display, font, bounding, first_line_y, background_color, &pen_x, &pen_y);
-      if (err != ILI9342_ERR_NONE) {
-        free(prepared_glyphs);
-        return err;
-      }
-
-      continue;
-    }
-
-    uint32_t codepoint = (uint8_t)c;
-    bmf_glyph_record_t glyph;
-    bmf_status_t bmf_ret = bmf_font_view_find_glyph_binary(font, codepoint, &glyph, NULL);
-    if (bmf_ret != BMF_STATUS_OK) {
-      free(prepared_glyphs);
-      return ILI9342_ERR_INVALID_ARG;
-    }
-
-    lcd_prepared_glyph_t prepared;
-    int32_t err = lcd_prepared_glyph_load(font, &glyph, &prepared);
-    if (err != ILI9342_ERR_NONE) {
-      free(prepared_glyphs);
-      return err;
-    }
-
-    if (lcd_prepared_glyph_has_bitmap(&prepared)) {
-      lcd_prepared_glyph_position_set(
-          &prepared, (int32_t)pen_x + glyph.x_offset, (int32_t)pen_y + glyph.y_offset);
-
-      if (prepared.draw_x + prepared.width - 1 > bounding->x1 && pen_x > bounding->x0) {
-        err = lcd_flush_prepared_glyph_run(display,
-                                           font,
-                                           prepared_glyphs,
-                                           prepared_count,
-                                           has_visible_pixels,
-                                           &line_clip,
-                                           background_color,
-                                           foreground_color);
-        if (err != ILI9342_ERR_NONE) {
-          free(prepared_glyphs);
-          return err;
-        }
-
-        prepared_count = 0U;
-        has_visible_pixels = false;
-
-        err = lcd_wrap_pen_to_next_line(
-            display, font, bounding, first_line_y, background_color, &pen_x, &pen_y);
-        if (err != ILI9342_ERR_NONE) {
-          free(prepared_glyphs);
-          return err;
-        }
-
-        lcd_prepared_glyph_position_set(
-            &prepared, (int32_t)pen_x + glyph.x_offset, (int32_t)pen_y + glyph.y_offset);
-      }
-
-      if (prepared.draw_y1 > bounding->y1) {
-        err = lcd_flush_prepared_glyph_run(display,
-                                           font,
-                                           prepared_glyphs,
-                                           prepared_count,
-                                           has_visible_pixels,
-                                           &line_clip,
-                                           background_color,
-                                           foreground_color);
-        if (err != ILI9342_ERR_NONE) {
-          free(prepared_glyphs);
-          return err;
-        }
-
-        prepared_count = 0U;
-        has_visible_pixels = false;
-
-        err = lcd_reset_pen_to_first_line(
-            display, font, bounding, first_line_y, background_color, &pen_x, &pen_y);
-        if (err != ILI9342_ERR_NONE) {
-          free(prepared_glyphs);
-          return err;
-        }
-
-        lcd_prepared_glyph_position_set(
-            &prepared, (int32_t)pen_x + glyph.x_offset, (int32_t)pen_y + glyph.y_offset);
-      }
-
-      rect_area_t glyph_clip;
-      if (rect_area_clip_to_bounds(bounding,
-                                   prepared.draw_x,
-                                   prepared.draw_y,
-                                   prepared.draw_x + prepared.width - 1,
-                                   prepared.draw_y1,
-                                   &glyph_clip)) {
-        prepared_glyphs[prepared_count++] = prepared;
-
-        if (!has_visible_pixels) {
-          line_clip = glyph_clip;
-          has_visible_pixels = true;
-        } else {
-          rect_area_include(&line_clip, &glyph_clip);
-        }
-      }
-    }
-
-    pen_x = (int16_t)((int32_t)pen_x + glyph.x_advance);
-    if (pen_x > bounding->x1) {
-      err = lcd_flush_prepared_glyph_run(display,
-                                         font,
-                                         prepared_glyphs,
-                                         prepared_count,
-                                         has_visible_pixels,
-                                         &line_clip,
-                                         background_color,
-                                         foreground_color);
-      if (err != ILI9342_ERR_NONE) {
-        free(prepared_glyphs);
-        return err;
-      }
-
-      prepared_count = 0U;
-      has_visible_pixels = false;
-
-      err = lcd_wrap_pen_to_next_line(
-          display, font, bounding, first_line_y, background_color, &pen_x, &pen_y);
-      if (err != ILI9342_ERR_NONE) {
-        free(prepared_glyphs);
-        return err;
-      }
-    }
-  }
-
-  int32_t err = lcd_flush_prepared_glyph_run(display,
-                                             font,
-                                             prepared_glyphs,
-                                             prepared_count,
-                                             has_visible_pixels,
-                                             &line_clip,
-                                             background_color,
-                                             foreground_color);
-  free(prepared_glyphs);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  if (next_x != NULL) {
-    *next_x = pen_x;
-  }
-  if (next_y != NULL) {
-    *next_y = pen_y;
-  }
-  return ILI9342_ERR_NONE;
-}
-
-static int32_t lcd_render_c_str_bounded(ili9342_t *display,
-                                        bmf_font_view_t *font,
-                                        const char *text,
-                                        int16_t x,
-                                        int16_t y,
-                                        const rect_area_t *bounding,
-                                        uint16_t foreground_color,
-                                        uint16_t background_color,
-                                        int16_t *next_x,
-                                        int16_t *next_y) {
-  if (text == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  return lcd_render_char_array_bounded(display,
-                                       font,
-                                       text,
-                                       strlen(text),
-                                       x,
-                                       y,
-                                       bounding,
-                                       foreground_color,
-                                       background_color,
-                                       next_x,
-                                       next_y);
-}
-
-static __attribute__((unused)) int32_t lcd_putc_wrap(ili9342_t *display,
-                                                     bmf_font_view_t *font,
-                                                     char c,
-                                                     int16_t x,
-                                                     int16_t y,
-                                                     const rect_area_t *bounding,
-                                                     uint16_t foreground_color,
-                                                     uint16_t background_color,
-                                                     int16_t *next_x,
-                                                     int16_t *next_y) {
-  return lcd_render_char_array_bounded(
-      display, font, &c, 1U, x, y, bounding, foreground_color, background_color, next_x, next_y);
-}
-
-static int32_t lcd_draw_rounded_button(ili9342_t *display,
-                                       bmf_font_view_t *font,
-                                       const rect_area_t *box,
-                                       const char *label,
-                                       uint16_t fill_color,
-                                       uint16_t text_color) {
-  int32_t err = lcd_fill_round_rect_r6(display,
-                                       (uint16_t)box->x0,
-                                       (uint16_t)box->y0,
-                                       (uint16_t)box->x1,
-                                       (uint16_t)box->y1,
-                                       fill_color);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  int16_t label_y = lcd_text_first_baseline_y(font, box);
-
-  return lcd_render_c_str_bounded(display,
-                                  font,
-                                  label,
-                                  (int16_t)(box->x0 + 12),
-                                  label_y,
-                                  box,
-                                  text_color,
-                                  fill_color,
-                                  NULL,
-                                  NULL);
-}
-
-static bool lcd_touch_point_in_rect(uint16_t x, uint16_t y, const rect_area_t *r) {
-  return x >= (uint16_t)r->x0 && x <= (uint16_t)r->x1 && y >= (uint16_t)r->y0 &&
-         y <= (uint16_t)r->y1;
 }
 
 static int32_t create_i2c_bus(void) {
@@ -1353,18 +171,6 @@ static int32_t axp2101_i2c_write_read(const uint8_t *write_buffer,
   return II2C_ERR_NONE;
 }
 
-static TaskHandle_t main_task_handle;
-
-static void IRAM_ATTR host_gpio_intr_handler(void *arg) {
-  if ((int32_t)arg == CORES3_I2C_INT_PIN) {
-    BaseType_t higher_priority_task_woken = pdFALSE;
-    vTaskNotifyGiveFromISR(main_task_handle, &higher_priority_task_woken);
-    if (higher_priority_task_woken == pdTRUE) {
-      portYIELD_FROM_ISR();
-    }
-  }
-}
-
 static int32_t ft6336_i2c_write(const uint8_t *write_buffer, size_t write_size) {
   return ii2c_master_transmit(ft6336_i2c, write_buffer, write_size);
 }
@@ -1386,6 +192,16 @@ static int32_t ft6336_i2c_write_read(const uint8_t *write_buffer,
 
   *read_size = read_capacity;
   return II2C_ERR_NONE;
+}
+
+static void IRAM_ATTR host_gpio_intr_handler(void *arg) {
+  if ((int32_t)arg == CORES3_I2C_INT_PIN) {
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    vTaskNotifyGiveFromISR(main_task_handle, &higher_priority_task_woken);
+    if (higher_priority_task_woken == pdTRUE) {
+      portYIELD_FROM_ISR();
+    }
+  }
 }
 
 static int32_t configure_touch_screen(void) {
@@ -1478,6 +294,31 @@ static int32_t configure_io_extender_interrupt(void) {
   return IGPIO_ERR_NONE;
 }
 
+static int32_t draw_rounded_button(display_surface_t *surface,
+                                   bmf_font_view_t *font,
+                                   const graphics_rect_t *box,
+                                   const char *label,
+                                   uint16_t fill_color,
+                                   uint16_t text_color) {
+  int32_t err = graphics_fill_round_rect_r6(surface, box, fill_color);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  int16_t label_y = graphics_text_first_baseline_y(font, box);
+
+  return graphics_draw_text_bounded(surface,
+                                    font,
+                                    label,
+                                    (int16_t)(box->x0 + 12),
+                                    label_y,
+                                    box,
+                                    text_color,
+                                    fill_color,
+                                    NULL,
+                                    NULL);
+}
+
 void app_main(void) {
   main_task_handle = xTaskGetCurrentTaskHandle();
 
@@ -1527,113 +368,40 @@ void app_main(void) {
     return;
   }
 
-  err = aw9523b_port_dir_set(&aw9523b_expander,
-                             CORES3_AW9523B_LCD_RST_PORT,
-                             CORES3_AW9523B_LCD_RST_PIN,
-                             AW9523B_PORT_DIRECTION_OUTPUT);
-  if (err != AW9523B_ERR_NONE) {
-    printf("Failed to set direction of the LCD reset pin: %s\n",
-           aw9523b_err_or_transport_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = aw9523b_level_set(
-      &aw9523b_expander, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
-  if (err != AW9523B_ERR_NONE) {
-    printf("Failed to set LCD RST logic to high: %s\n", aw9523b_err_or_transport_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = configure_lcd_dc_gpio();
-  if (err != IGPIO_ERR_NONE) {
-    printf("Failed to configure LCD DC GPIO: %s\n", igpio_err_to_name(err));
-    release_handles();
-    return;
-  }
-
   err = configure_io_extender_interrupt();
-  if (err != 0) {
-    printf("Failed to setup Setup I/O Extender: %ld\n", (long)err);
+  if (err != IGPIO_ERR_NONE) {
+    printf("Failed to setup I/O extender interrupt: %ld\n", (long)err);
     release_handles();
     return;
   }
 
   err = configure_touch_screen();
-  if (err != 0) {
+  if (err != FT6X36_ERR_NONE) {
     printf("Failed to configure the touch screen: %s (%ld)\n", touch_err_to_name(err), (long)err);
     release_handles();
     return;
   }
 
-  ispi_master_bus_config_t spi_bus_cfg = {0};
-  ispi_get_default_master_bus_config(&spi_bus_cfg);
-  spi_bus_cfg.host = ISPI_HOST_SPI2;
-  spi_bus_cfg.mosi_io_num = LCD_SPI_MOSI;
-  spi_bus_cfg.miso_io_num = -1;
-  spi_bus_cfg.sclk_io_num = LCD_SPI_SCK;
-  spi_bus_cfg.max_transfer_sz = LCD_SPI_MAX_TRANSFER_BYTES;
-
-  err = ispi_new_master_bus(&spi_bus_cfg, &lcd_spi);
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to create new SPI master bus: %s\n", ispi_err_to_name(err));
-    release_handles();
-    return;
-  }
-
-  ispi_device_config_t lcd_dev_cfg = {0};
-  ispi_get_default_device_config(&lcd_dev_cfg);
-  lcd_dev_cfg.cs_io_num = LCD_SPI_CS;
-  lcd_dev_cfg.clock_speed_hz = 40000000;
-  lcd_dev_cfg.mode = 0;
-
-  err = ispi_new_device(lcd_spi, &lcd_dev_cfg, &lcd);
-  if (err != ISPI_ERR_NONE) {
-    printf("Failed to create SPI device: %s\n", ispi_err_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = lcd_hard_reset();
-  if (err != AW9523B_ERR_NONE) {
-    printf(
-        "Failed to hard-reset LCD: %s (%ld)\n", aw9523b_err_or_transport_to_name(err), (long)err);
-    release_handles();
-    return;
-  }
-
-  ili9342_t display = {
-      .transport_data_write = lcd_write_data,
-      .transport_command_write = lcd_write_command,
-      .delay_fn = delay_ms,
-  };
-
-  err = ili9342_init_default(&display);
+  err = cores3_display_init(&board_display, &aw9523b_expander);
   if (err != ILI9342_ERR_NONE) {
-    printf("Failed to initialize LCD controller: %ld\n", (long)err);
+    printf("Failed to initialize CoreS3 display: %ld\n", (long)err);
     release_handles();
     return;
   }
 
-  err = ili9342_memory_access_control_set(
-      &display, ILI9342_MADCTL_BGR | ILI9342_MADCTL_MX | ILI9342_MADCTL_MY);
+  err = display_surface_init(&app_surface,
+                             cores3_display_panel(&board_display),
+                             cores3_display_width(),
+                             cores3_display_height(),
+                             cores3_display_max_transfer_bytes());
   if (err != ILI9342_ERR_NONE) {
-    printf("Failed setting the memory access control: %ld\n", (long)err);
+    printf("Failed to initialize display surface: %ld\n", (long)err);
     release_handles();
     return;
   }
 
-  puts("LCD panel init commands complete");
-
-  err = ili9342_address_window_set(&display, 0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Failed to set LCD address window: %ld\n", (long)err);
-    release_handles();
-    return;
-  }
-
-  uint16_t background_color = rgb888_to_rgb565(0, 0, 0);
+  uint16_t background_color = graphics_rgb888_to_rgb565(0, 0, 0);
+  uint16_t foreground_color = 0xFFFF;
 
   bmf_font_view_t font_view;
   bmf_font_view_init(&font_view);
@@ -1644,7 +412,8 @@ void app_main(void) {
     release_handles();
     return;
   }
-  err = lcd_fill_screen(&display, background_color);
+
+  err = graphics_fill_screen(&app_surface, background_color);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to fill the LCD background: %ld\n", (long)err);
     release_handles();
@@ -1652,6 +421,7 @@ void app_main(void) {
   }
 
   bmf_font_view_t opensans_16;
+  bmf_font_view_init(&opensans_16);
   bmf_ret = bmf_font_view_load_bytes(&opensans_16, open_sans_regular_16, open_sans_regular_16_len);
   if (bmf_ret != BMF_STATUS_OK) {
     printf("Failed to load font: %d\n", (int)bmf_ret);
@@ -1659,31 +429,44 @@ void app_main(void) {
     return;
   }
 
-  uint16_t foreground_color = 0xFFFF;
-  int16_t x, y;
-
   char free_heap_str[64] = {0};
   snprintf(
       free_heap_str, sizeof(free_heap_str), "Heap: %lu B", (unsigned long)esp_get_free_heap_size());
-  rect_area_t status_bounding = {
+  graphics_rect_t status_bounding = {
       .x0 = 10,
-      .y0 = LCD_HEIGHT - 30,
-      .x1 = LCD_WIDTH - 10,
-      .y1 = LCD_HEIGHT - 1,
+      .y0 = (int16_t)(cores3_display_height() - 30U),
+      .x1 = (int16_t)(cores3_display_width() - 10U),
+      .y1 = (int16_t)(cores3_display_height() - 1U),
   };
 
-  err = lcd_fill_rect(&display, 0, status_bounding.y0, LCD_WIDTH - 1, LCD_HEIGHT - 1, 0xFFFF);
+  err = graphics_fill_rect(&app_surface,
+                           0U,
+                           (uint16_t)status_bounding.y0,
+                           (uint16_t)(cores3_display_width() - 1U),
+                           (uint16_t)(cores3_display_height() - 1U),
+                           0xFFFF);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render status bar: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
+    return;
   }
-  x = status_bounding.x0;
-  y = lcd_text_first_baseline_y(&opensans_16, &status_bounding) + 5;
-  err = lcd_render_c_str_bounded(
-      &display, &opensans_16, free_heap_str, x, y, &status_bounding, 0x0000, 0xFFFF, NULL, NULL);
+
+  int16_t x = status_bounding.x0;
+  int16_t y = (int16_t)(graphics_text_first_baseline_y(&opensans_16, &status_bounding) + 5);
+  err = graphics_draw_text_bounded(&app_surface,
+                                   &opensans_16,
+                                   free_heap_str,
+                                   x,
+                                   y,
+                                   &status_bounding,
+                                   0x0000,
+                                   0xFFFF,
+                                   NULL,
+                                   NULL);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render heap info: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
+    return;
   }
 
   const char *msg2 =
@@ -1691,26 +474,29 @@ void app_main(void) {
       "this overflow too? Ah great! Then, how about this?\nI'm at the new line and I'm about to "
       "overflow the Y axis too! How's that?";
 
-  rect_area_t bounding = {
+  graphics_rect_t bounding = {
       .x0 = 10,
       .y0 = 64,
-      .x1 = LCD_WIDTH - 10,
-      .y1 = LCD_HEIGHT - 30,
+      .x1 = (int16_t)(cores3_display_width() - 10U),
+      .y1 = (int16_t)(cores3_display_height() - 30U),
   };
   x = bounding.x0;
-  y = lcd_text_first_baseline_y(&font_view, &bounding);
-#if 0
-  err = lcd_render_c_str_bounded(
-      &display, &font_view, msg2, x, y, &bounding, foreground_color, background_color, &x, &y);
-#else
+  y = graphics_text_first_baseline_y(&font_view, &bounding);
   for (size_t i = 0; i < strlen(msg2); i++) {
-    err = lcd_putc_wrap(
-        &display, &font_view, msg2[i], x, y, &bounding, foreground_color, background_color, &x, &y);
+    err = graphics_draw_char_bounded(&app_surface,
+                                     &font_view,
+                                     msg2[i],
+                                     x,
+                                     y,
+                                     &bounding,
+                                     foreground_color,
+                                     background_color,
+                                     &x,
+                                     &y);
     if (err != ILI9342_ERR_NONE) {
       break;
     }
   }
-#endif
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to render bounded string: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     release_handles();
@@ -1722,52 +508,62 @@ void app_main(void) {
   uint16_t buttons_x_offset = 5;
   uint16_t buttons_y_offset = 10;
   uint16_t buttons_x_margin = 10;
-  rect_area_t button = {
-      .x0 = buttons_x_offset,
-      .y0 = buttons_y_offset,
-      .x1 = buttons_x_offset + buttons_width,
-      .y1 = buttons_height,
+  graphics_rect_t button = {
+      .x0 = (int16_t)buttons_x_offset,
+      .y0 = (int16_t)buttons_y_offset,
+      .x1 = (int16_t)(buttons_x_offset + buttons_width),
+      .y1 = (int16_t)buttons_height,
   };
 
-  err = lcd_fill_round_rect_r6(&display,
-                               (uint16_t)button.x0,
-                               (uint16_t)button.y0,
-                               (uint16_t)button.x1,
-                               (uint16_t)button.y1,
-                               0x001F);
+  err = graphics_fill_round_rect_r6(&app_surface, &button, 0x001F);
+  if (err != ILI9342_ERR_NONE) {
+    printf(
+        "Failed to draw first button background: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
+    release_handles();
+    return;
+  }
 
-  int16_t label_y = lcd_text_first_baseline_y(&opensans_16, &button);
-  err = lcd_render_c_str_bounded(&display,
-                                 &opensans_16,
-                                 "Tap me",
-                                 button.x0 + 15,
-                                 label_y + 12,
-                                 &button,
-                                 0xFFFF,
-                                 0x001F,
-                                 NULL,
-                                 NULL);
+  int16_t label_y = graphics_text_first_baseline_y(&opensans_16, &button);
+  err = graphics_draw_text_bounded(&app_surface,
+                                   &opensans_16,
+                                   "Tap me",
+                                   (int16_t)(button.x0 + 15),
+                                   (int16_t)(label_y + 12),
+                                   &button,
+                                   0xFFFF,
+                                   0x001F,
+                                   NULL,
+                                   NULL);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed to draw first button label: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
+    release_handles();
+    return;
+  }
+
   buttons_x_offset += buttons_width;
-  // buttons_y_offset is not incremented becase we're not moving down.
-  rect_area_t another = {
-      .x0 = buttons_x_offset + buttons_x_margin,
-      .y0 = buttons_y_offset,
-      .x1 = buttons_x_offset + buttons_width,
-      .y1 = buttons_height,
+  graphics_rect_t another = {
+      .x0 = (int16_t)(buttons_x_offset + buttons_x_margin),
+      .y0 = (int16_t)buttons_y_offset,
+      .x1 = (int16_t)(buttons_x_offset + buttons_width),
+      .y1 = (int16_t)buttons_height,
   };
-  lcd_draw_rounded_button(&display, &opensans_16, &another, "Also me", 0xFFFF, 0x0000);
+  err = draw_rounded_button(&app_surface, &opensans_16, &another, "Also me", 0xFFFF, 0x0000);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed to draw second button: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
+    release_handles();
+    return;
+  }
 
   buttons_x_offset += buttons_width;
-
-  err = lcd_fill_round_rect_r6_top(&display,
-                                   &(const rect_area_t){
-                                       .x0 = buttons_x_offset + buttons_x_margin,
-                                       .y0 = buttons_y_offset,
-                                       .x1 = buttons_x_offset + buttons_width,
-                                       .y1 = buttons_height,
-                                   },
-                                   0xFF08);
-  printf("lcd_fill_round_rect_r6_top -> %ld\n", (long)err);
+  err = graphics_fill_round_rect_r6_top(&app_surface,
+                                        &(const graphics_rect_t){
+                                            .x0 = (int16_t)(buttons_x_offset + buttons_x_margin),
+                                            .y0 = (int16_t)buttons_y_offset,
+                                            .x1 = (int16_t)(buttons_x_offset + buttons_width),
+                                            .y1 = (int16_t)buttons_height,
+                                        },
+                                        0xFF08);
+  printf("graphics_fill_round_rect_r6_top -> %ld\n", (long)err);
 
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -1786,38 +582,37 @@ void app_main(void) {
     err = ft6x36_touch_data_get(&ft6336, &out_touch);
     if (err != FT6X36_ERR_NONE) {
       printf("Failed to read the touch data: %s (%ld)", ft6x36_err_to_name(err), (long)err);
-    } else {
-      ESP_LOGI("TOUCH", "Touch count = %u", out_touch.touch_count);
-      ESP_LOGI("TOUCH", "Gesture ID: %u", out_touch.gesture_id);
+      continue;
+    }
 
-      // note: x, y coordinate is upside down in relation to the LCD orientation
-      // we flipped the LCD orientation though.
-      for (uint8_t count = 0; count < out_touch.touch_count; count++) {
-        ESP_LOGI("TOUCH",
-                 "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u",
-                 count,
-                 out_touch.points[count].x,
-                 out_touch.points[count].y,
-                 out_touch.points[count].area,
-                 out_touch.points[count].weight,
-                 (uint8_t)out_touch.points[count].event);
+    ESP_LOGI("TOUCH", "Touch count = %u", out_touch.touch_count);
+    ESP_LOGI("TOUCH", "Gesture ID: %u", out_touch.gesture_id);
 
-        uint16_t x = LCD_WIDTH - out_touch.points[count].x;
-        uint16_t y = LCD_HEIGHT - out_touch.points[count].y;
+    for (uint8_t count = 0; count < out_touch.touch_count; count++) {
+      ESP_LOGI("TOUCH",
+               "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u",
+               count,
+               out_touch.points[count].x,
+               out_touch.points[count].y,
+               out_touch.points[count].area,
+               out_touch.points[count].weight,
+               (uint8_t)out_touch.points[count].event);
 
-        switch (out_touch.points[count].event) {
-          case FT6X36_TOUCH_EVENT_PRESS_DOWN:
-            if (lcd_touch_point_in_rect(x, y, &button)) {
-              ESP_LOGI("TOUCH", "Button is touched!");
-            }
+      uint16_t touch_x = (uint16_t)(cores3_display_width() - out_touch.points[count].x);
+      uint16_t touch_y = (uint16_t)(cores3_display_height() - out_touch.points[count].y);
 
-            if (lcd_touch_point_in_rect(x, y, &another)) {
-              ESP_LOGI("TOUCH", "Another button is touched!");
-            }
+      switch (out_touch.points[count].event) {
+        case FT6X36_TOUCH_EVENT_PRESS_DOWN:
+          if (graphics_rect_contains_point(&button, touch_x, touch_y)) {
+            ESP_LOGI("TOUCH", "Button is touched!");
+          }
 
-          default:
-            break;
-        }
+          if (graphics_rect_contains_point(&another, touch_x, touch_y)) {
+            ESP_LOGI("TOUCH", "Another button is touched!");
+          }
+
+        default:
+          break;
       }
     }
   }

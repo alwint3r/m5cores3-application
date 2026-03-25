@@ -58,7 +58,7 @@ extern "C" {
  * The callback must already know how to represent the command phase for the
  * active transport, such as D/C low on SPI or a command prefix on I2C.
  */
-typedef int32_t (*ili9342_transport_command_write)(uint8_t command);
+typedef int32_t (*ili9342_transport_command_write)(void *context, uint8_t command);
 
 /**
  * @brief Callback that sends raw data bytes to the controller.
@@ -66,14 +66,15 @@ typedef int32_t (*ili9342_transport_command_write)(uint8_t command);
  * The callback must already know how to represent the data phase for the
  * active transport.
  */
-typedef int32_t (*ili9342_transport_data_write)(const uint8_t *data, size_t len);
+typedef int32_t (*ili9342_transport_data_write)(void *context, const uint8_t *data, size_t len);
 
 /** @brief Callback that sleeps for the requested number of milliseconds. */
-typedef void (*ili9342_delay_ms)(uint32_t ms);
+typedef void (*ili9342_delay_ms)(void *context, uint32_t ms);
 
 typedef struct ili9342 ili9342_t;
 /** @brief Transport callback set used by the low-level controller helpers. */
 struct ili9342 {
+  void *transport_context;
   ili9342_transport_data_write transport_data_write;
   ili9342_transport_command_write transport_command_write;
   ili9342_delay_ms delay_fn;

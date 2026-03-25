@@ -45,7 +45,7 @@ static int32_t ili9342_write_command_only(ili9342_t *display, uint8_t command) {
     return ILI9342_ERR_INVALID_STATE;
   }
 
-  return display->transport_command_write(command);
+  return display->transport_command_write(display->transport_context, command);
 }
 
 const char *ili9342_err_to_name(int32_t err) {
@@ -89,7 +89,7 @@ int32_t ili9342_write_command(ili9342_t *display,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = display->transport_command_write(command);
+  int32_t err = display->transport_command_write(display->transport_context, command);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
@@ -98,7 +98,7 @@ int32_t ili9342_write_command(ili9342_t *display,
     return ILI9342_ERR_NONE;
   }
 
-  return display->transport_data_write(data, len);
+  return display->transport_data_write(display->transport_context, data, len);
 }
 
 int32_t ili9342_write_data(ili9342_t *display, const uint8_t *data, size_t len) {
@@ -110,7 +110,7 @@ int32_t ili9342_write_data(ili9342_t *display, const uint8_t *data, size_t len) 
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  return display->transport_data_write(data, len);
+  return display->transport_data_write(display->transport_context, data, len);
 }
 
 int32_t ili9342_reset_software(ili9342_t *display) {
@@ -123,7 +123,7 @@ int32_t ili9342_reset_software(ili9342_t *display) {
     return err;
   }
 
-  display->delay_fn(120);
+  display->delay_fn(display->transport_context, 120);
   return ILI9342_ERR_NONE;
 }
 
@@ -141,7 +141,7 @@ int32_t ili9342_sleep_exit(ili9342_t *display) {
     return err;
   }
 
-  display->delay_fn(120);
+  display->delay_fn(display->transport_context, 120);
   return ILI9342_ERR_NONE;
 }
 
@@ -344,6 +344,6 @@ int32_t ili9342_init_default(ili9342_t *display) {
     return err;
   }
 
-  display->delay_fn(20);
+  display->delay_fn(display->transport_context, 20);
   return ILI9342_ERR_NONE;
 }
