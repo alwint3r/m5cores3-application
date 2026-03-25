@@ -106,9 +106,8 @@ int32_t cores3_io_extender_host_interrupt_init(TaskHandle_t notify_task) {
 
   (void)gpio_isr_handler_remove((gpio_num_t)CORES3_I2C_INT_PIN);
 
-  err = gpio_isr_handler_add((gpio_num_t)CORES3_I2C_INT_PIN,
-                             host_gpio_intr_handler,
-                             (void *)notify_task);
+  err = gpio_isr_handler_add(
+      (gpio_num_t)CORES3_I2C_INT_PIN, host_gpio_intr_handler, (void *)notify_task);
   if (err != ESP_OK) {
     return err;
   }

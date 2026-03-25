@@ -1,4 +1,4 @@
-#include "graphics/text_renderer.h"
+#include "text_renderer.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -133,8 +133,8 @@ static int32_t prepared_glyph_coverage_get(const bmf_font_view_t *font_view,
                                            int src_y,
                                            uint8_t *coverage) {
   if (font_view == NULL || prepared == NULL || coverage == NULL ||
-      !prepared_glyph_has_bitmap(prepared) || src_x < 0 || src_y < 0 ||
-      src_x >= prepared->width || src_y >= prepared->height) {
+      !prepared_glyph_has_bitmap(prepared) || src_x < 0 || src_y < 0 || src_x >= prepared->width ||
+      src_y >= prepared->height) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
@@ -309,7 +309,8 @@ static int32_t flush_prepared_glyph_run(display_surface_t *surface,
                                 foreground_color);
 }
 
-int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font, const graphics_rect_t *bounding) {
+int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font,
+                                       const graphics_rect_t *bounding) {
   int16_t first_line_y = bounding->y0;
   if (font->ascent > 0) {
     first_line_y = (int16_t)(bounding->y0 + font->ascent);
@@ -669,15 +670,6 @@ int32_t graphics_draw_char_bounded(display_surface_t *surface,
                                    uint16_t background_color,
                                    int16_t *next_x,
                                    int16_t *next_y) {
-  return draw_char_array_bounded(surface,
-                                 font,
-                                 &c,
-                                 1U,
-                                 x,
-                                 y,
-                                 bounding,
-                                 foreground_color,
-                                 background_color,
-                                 next_x,
-                                 next_y);
+  return draw_char_array_bounded(
+      surface, font, &c, 1U, x, y, bounding, foreground_color, background_color, next_x, next_y);
 }

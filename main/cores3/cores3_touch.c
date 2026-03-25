@@ -54,7 +54,8 @@ static int32_t ft6336_i2c_write_read(void *context,
     return II2C_ERR_INVALID_ARG;
   }
 
-  int32_t err = ii2c_master_transmit_receive(device, write_buffer, write_size, read_buffer, read_capacity);
+  int32_t err =
+      ii2c_master_transmit_receive(device, write_buffer, write_size, read_buffer, read_capacity);
   if (err != II2C_ERR_NONE) {
     return err;
   }
@@ -80,8 +81,7 @@ static int32_t configure_touch_aw9523b_pins(aw9523b_t *expander) {
     return err;
   }
 
-  err = aw9523b_level_set(
-      expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 0);
+  err = aw9523b_level_set(expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 0);
   if (err != AW9523B_ERR_NONE) {
     return err;
   }
@@ -97,16 +97,15 @@ static int32_t prepare_touch_power_and_reset(aw9523b_t *expander) {
   puts("FT6x36 transport attached; waiting for LCD-linked power to settle");
   delay_ms(CORES3_TOUCH_POWER_SETTLE_DELAY_MS);
 
-  int32_t err = aw9523b_level_set(
-      expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 0);
+  int32_t err =
+      aw9523b_level_set(expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 0);
   if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
   delay_ms(CORES3_TOUCH_RESET_LOW_DELAY_MS);
 
-  err = aw9523b_level_set(
-      expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
+  err = aw9523b_level_set(expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
   if (err != AW9523B_ERR_NONE) {
     return err;
   }

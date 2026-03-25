@@ -21,4 +21,6 @@ uint16_t graphics_blend_rgb565(uint16_t background_color,
 void graphics_store_rgb565(uint8_t *dst, uint16_t color);
 void graphics_fill_color_span(uint8_t *buffer, size_t pixel_count, uint16_t color);
 
-int32_t graphics_write_buffer_chunked(display_surface_t *surface, const uint8_t *buffer, size_t len);
+int32_t graphics_write_buffer_chunked(display_surface_t *surface,
+                                      const uint8_t *buffer,
+                                      size_t len);

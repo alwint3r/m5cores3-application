@@ -1,4 +1,4 @@
-#include "graphics/render_support.h"
+#include "render_support.h"
 
 void graphics_store_rgb565(uint8_t *dst, uint16_t color) {
   if (dst == NULL) {
@@ -19,7 +19,9 @@ void graphics_fill_color_span(uint8_t *buffer, size_t pixel_count, uint16_t colo
   }
 }
 
-int32_t graphics_write_buffer_chunked(display_surface_t *surface, const uint8_t *buffer, size_t len) {
+int32_t graphics_write_buffer_chunked(display_surface_t *surface,
+                                      const uint8_t *buffer,
+                                      size_t len) {
   if (surface == NULL || surface->panel == NULL || buffer == NULL || len == 0U) {
     return ILI9342_ERR_INVALID_ARG;
   }

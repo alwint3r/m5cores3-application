@@ -1,8 +1,8 @@
-#include "graphics/bitmap_icon.h"
+#include "bitmap_icon.h"
 
 #include <stdbool.h>
 
-#include "graphics/render_support.h"
+#include "render_support.h"
 
 static uint16_t minimum_stride_bytes(uint16_t width, graphics_bitmap_mask_format_t format) {
   if (format == GRAPHICS_BITMAP_MASK_1BPP) {
@@ -103,8 +103,7 @@ int32_t graphics_draw_bitmap_icon(display_surface_t *surface,
   int32_t icon_y1 = icon_y0 + (int32_t)icon->height - 1;
 
   graphics_rect_t visible = {0};
-  if (!graphics_rect_clip_to_bounds(
-          clip_bounds, icon_x0, icon_y0, icon_x1, icon_y1, &visible)) {
+  if (!graphics_rect_clip_to_bounds(clip_bounds, icon_x0, icon_y0, icon_x1, icon_y1, &visible)) {
     return ILI9342_ERR_NONE;
   }
 
@@ -130,9 +129,14 @@ int32_t graphics_draw_bitmap_icon(display_surface_t *surface,
     for (int dst_x = visible.x0; dst_x <= visible.x1; dst_x++) {
       int src_x = dst_x - x;
       uint8_t coverage = 0U;
-      err = graphics_mask_coverage_get(
-          icon->format, icon->data, icon->stride_bytes, icon->width, icon->height, src_x, src_y,
-          &coverage);
+      err = graphics_mask_coverage_get(icon->format,
+                                       icon->data,
+                                       icon->stride_bytes,
+                                       icon->width,
+                                       icon->height,
+                                       src_x,
+                                       src_y,
+                                       &coverage);
       if (err != ILI9342_ERR_NONE) {
         return err;
       }

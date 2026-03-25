@@ -1,4 +1,4 @@
-#include "graphics/display_surface.h"
+#include "display_surface.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -207,9 +207,12 @@ int32_t graphics_fill_round_rect_r6_top(display_surface_t *surface,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = graphics_fill_rect(
-      surface, (uint16_t)bounds->x0, (uint16_t)(bounds->y0 + 6), (uint16_t)bounds->x1,
-      (uint16_t)bounds->y1, color);
+  int32_t err = graphics_fill_rect(surface,
+                                   (uint16_t)bounds->x0,
+                                   (uint16_t)(bounds->y0 + 6),
+                                   (uint16_t)bounds->x1,
+                                   (uint16_t)bounds->y1,
+                                   color);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
