@@ -56,11 +56,12 @@ static const int CORES3_I2C_INT_PIN = 21;
 
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b = NULL;
-static ii2c_device_handle_t axp2101 = NULL;
+static ii2c_device_handle_t axp2101_i2c = NULL;
 static ispi_master_bus_handle_t lcd_spi = NULL;
 static ispi_device_handle_t lcd = NULL;
 static ii2c_device_handle_t ft6336_i2c = NULL;
 static bool lcd_dc_gpio_configured = false;
+static axp2101_t axp2101_pmic = {0};
 static ft6x36_t ft6336;
 
 typedef struct {
@@ -90,6 +91,14 @@ static const char *bool_to_yes_no(bool value) {
 static const char *touch_err_to_name(int32_t err) {
   if (err >= FT6X36_ERR_BASE && err < (FT6X36_ERR_BASE + 0x100)) {
     return ft6x36_err_to_name(err);
+  }
+
+  return ii2c_err_to_name(err);
+}
+
+static const char *axp2101_err_or_transport_to_name(int32_t err) {
+  if (err >= AXP2101_ERR_BASE && err < (AXP2101_ERR_BASE + 0x100)) {
+    return axp2101_err_to_name(err);
   }
 
   return ii2c_err_to_name(err);
@@ -127,10 +136,12 @@ static void release_handles(void) {
     aw9523b = NULL;
   }
 
-  if (axp2101 != NULL) {
-    (void)ii2c_del_device(axp2101);
-    axp2101 = NULL;
+  if (axp2101_i2c != NULL) {
+    (void)ii2c_del_device(axp2101_i2c);
+    axp2101_i2c = NULL;
   }
+  axp2101_pmic.transport_write = NULL;
+  axp2101_pmic.transport_write_read = NULL;
 
   if (ft6336_i2c != NULL) {
     (void)ii2c_del_device(ft6336_i2c);
@@ -279,11 +290,10 @@ static int32_t lcd_fill_round_rect_r6_top(ili9342_t *display,
     printf("Dang it son\n");
     return ILI9342_ERR_INVALID_ARG;
   }
-  static const uint8_t inset[6] = {3, 2, 1, 1, 0, 0};
+  static const uint8_t inset[6] = {4, 3, 2, 1, 1, 0};
 
   // we fill the middle
-  int32_t err =
-      lcd_fill_rect(display, bounds->x0, bounds->y0 + 6, bounds->x1, bounds->y1 - 6, color);
+  int32_t err = lcd_fill_rect(display, bounds->x0, bounds->y0 + 6, bounds->x1, bounds->y1, color);
   if (err != ILI9342_ERR_NONE) {
     printf("Dang it 2 son\n");
 
@@ -1318,6 +1328,29 @@ static int32_t attach_i2c_device(uint16_t address, ii2c_device_handle_t *out_dev
   return ii2c_new_device(sys_i2c, &dev_cfg, out_device);
 }
 
+static int32_t axp2101_i2c_write(const uint8_t *write_buffer, size_t write_size) {
+  return ii2c_master_transmit(axp2101_i2c, write_buffer, write_size);
+}
+
+static int32_t axp2101_i2c_write_read(const uint8_t *write_buffer,
+                                      size_t write_size,
+                                      uint8_t *read_buffer,
+                                      size_t *read_size,
+                                      size_t read_capacity) {
+  if (!read_buffer || !read_size) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  int32_t err = ii2c_master_transmit_receive(
+      axp2101_i2c, write_buffer, write_size, read_buffer, read_capacity);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  *read_size = read_capacity;
+  return II2C_ERR_NONE;
+}
+
 static int32_t configure_aw9523b_boost_enable(ii2c_device_handle_t dev) {
   int32_t err = aw9523b_port_dir_set(dev,
                                      CORES3_AW9523B_BOOST_EN_PORT,
@@ -1347,45 +1380,45 @@ static int32_t configure_aw9523b_boost_enable(ii2c_device_handle_t dev) {
   return II2C_ERR_NONE;
 }
 
-static int32_t configure_axp2101_ldos(ii2c_device_handle_t dev) {
+static int32_t configure_axp2101_ldos(axp2101_t *pmic) {
   uint8_t ldo_mask = AXP2101_LDO_CTRL0_EN_DLDO1 | AXP2101_LDO_CTRL0_EN_BLDO2 |
                      AXP2101_LDO_CTRL0_EN_BLDO1 | AXP2101_LDO_CTRL0_EN_ALDO4 |
                      AXP2101_LDO_CTRL0_EN_ALDO3 | AXP2101_LDO_CTRL0_EN_ALDO2 |
                      AXP2101_LDO_CTRL0_EN_ALDO1;
 
-  int32_t err = axp2101_ldo_ctrl0_enable(dev, ldo_mask);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = axp2101_ldo_ctrl0_enable(pmic, ldo_mask);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   axp2101_ldo_ctrl0_t ldo_state = {0};
-  err = axp2101_ldo_ctrl0_get(dev, &ldo_state);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_ldo_ctrl0_get(pmic, &ldo_state);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   if (!ldo_state.dldo1_en || ldo_state.cpusldo_en || !ldo_state.bldo2_en || !ldo_state.bldo1_en ||
       !ldo_state.aldo4_en || !ldo_state.aldo3_en || !ldo_state.aldo2_en || !ldo_state.aldo1_en) {
-    return II2C_ERR_INVALID_STATE;
+    return AXP2101_ERR_INVALID_STATE;
   }
 
-  err = axp2101_aldo1_voltage_set(dev, 1800);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo1_voltage_set(pmic, 1800);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_aldo2_voltage_set(dev, 3300);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo2_voltage_set(pmic, 3300);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_aldo3_voltage_set(dev, 3300);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo3_voltage_set(pmic, 3300);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_aldo4_voltage_set(dev, 3300);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo4_voltage_set(pmic, 3300);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
@@ -1394,120 +1427,120 @@ static int32_t configure_axp2101_ldos(ii2c_device_handle_t dev) {
   uint16_t aldo3_mv = 0;
   uint16_t aldo4_mv = 0;
 
-  err = axp2101_aldo1_voltage_get(dev, &aldo1_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo1_voltage_get(pmic, &aldo1_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_aldo2_voltage_get(dev, &aldo2_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo2_voltage_get(pmic, &aldo2_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_aldo3_voltage_get(dev, &aldo3_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo3_voltage_get(pmic, &aldo3_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_aldo4_voltage_get(dev, &aldo4_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_aldo4_voltage_get(pmic, &aldo4_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   if (aldo1_mv != 1800 || aldo2_mv != 3300 || aldo3_mv != 3300 || aldo4_mv != 3300) {
-    return II2C_ERR_INVALID_STATE;
+    return AXP2101_ERR_INVALID_STATE;
   }
 
   puts("AXP2101 LDO rails configured");
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
-static int32_t configure_axp2101_dcdc1(ii2c_device_handle_t dev) {
-  int32_t err = axp2101_dcdc1_voltage_set(dev, CORES3_AXP2101_DCDC1_LCD_PWR_MV);
-  if (err != II2C_ERR_NONE) {
+static int32_t configure_axp2101_dcdc1(axp2101_t *pmic) {
+  int32_t err = axp2101_dcdc1_voltage_set(pmic, CORES3_AXP2101_DCDC1_LCD_PWR_MV);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = axp2101_dcdc_ctrl0_enable(dev, AXP2101_DCDC_CTRL0_EN_DCDC1);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_dcdc_ctrl0_enable(pmic, AXP2101_DCDC_CTRL0_EN_DCDC1);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   uint16_t dcdc1_mv = 0;
-  err = axp2101_dcdc1_voltage_get(dev, &dcdc1_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_dcdc1_voltage_get(pmic, &dcdc1_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   axp2101_dcdc_ctrl0_t dcdc_state = {0};
-  err = axp2101_dcdc_ctrl0_get(dev, &dcdc_state);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_dcdc_ctrl0_get(pmic, &dcdc_state);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   if (dcdc1_mv != CORES3_AXP2101_DCDC1_LCD_PWR_MV || !dcdc_state.dcdc1_en) {
-    return II2C_ERR_INVALID_STATE;
+    return AXP2101_ERR_INVALID_STATE;
   }
 
   printf("AXP2101 DCDC1 configured to %u mV\n", dcdc1_mv);
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
-static int32_t configure_axp2101_power_key(ii2c_device_handle_t dev) {
+static int32_t configure_axp2101_power_key(axp2101_t *pmic) {
   axp2101_irq_off_on_level_t config = {
       .irq_time = AXP2101_POWER_KEY_IRQ_TIME_1S,
       .poweroff_time = AXP2101_POWER_KEY_POWEROFF_TIME_4S,
       .poweron_time = AXP2101_POWER_KEY_ON_TIME_128MS,
   };
 
-  int32_t err = axp2101_irq_off_on_level_set(dev, &config);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = axp2101_irq_off_on_level_set(pmic, &config);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   axp2101_irq_off_on_level_t readback = {0};
-  err = axp2101_irq_off_on_level_get(dev, &readback);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_irq_off_on_level_get(pmic, &readback);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   if (readback.irq_time != config.irq_time || readback.poweroff_time != config.poweroff_time ||
       readback.poweron_time != config.poweron_time) {
-    return II2C_ERR_INVALID_STATE;
+    return AXP2101_ERR_INVALID_STATE;
   }
 
   puts("AXP2101 power-key timing configured");
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
-static int32_t configure_axp2101_chgled(ii2c_device_handle_t dev) {
+static int32_t configure_axp2101_chgled(axp2101_t *pmic) {
   axp2101_chgled_ctrl_t config = {
       .enabled = true,
       .function = AXP2101_CHGLED_FUNCTION_TYPE_A,
       .output = AXP2101_CHGLED_OUTPUT_BLINK_1HZ,
   };
 
-  int32_t err = axp2101_chgled_ctrl_set(dev, &config);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = axp2101_chgled_ctrl_set(pmic, &config);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   axp2101_chgled_ctrl_t readback = {0};
-  err = axp2101_chgled_ctrl_get(dev, &readback);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_chgled_ctrl_get(pmic, &readback);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   if (!readback.enabled || readback.function != config.function ||
       readback.output != config.output) {
-    return II2C_ERR_INVALID_STATE;
+    return AXP2101_ERR_INVALID_STATE;
   }
 
   puts("AXP2101 CHGLED configured");
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
-static int32_t configure_axp2101_pmu_common(ii2c_device_handle_t dev) {
+static int32_t configure_axp2101_pmu_common(axp2101_t *pmic) {
   axp2101_pmu_common_cfg_t config = {
       .raw_bits_7_6 = 0,
       .internal_off_discharge_enabled = true,
@@ -1518,14 +1551,14 @@ static int32_t configure_axp2101_pmu_common(ii2c_device_handle_t dev) {
       .soft_pwroff = false,
   };
 
-  int32_t err = axp2101_pmu_common_cfg_set(dev, &config);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = axp2101_pmu_common_cfg_set(pmic, &config);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   axp2101_pmu_common_cfg_t readback = {0};
-  err = axp2101_pmu_common_cfg_get(dev, &readback);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_pmu_common_cfg_get(pmic, &readback);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
@@ -1534,82 +1567,82 @@ static int32_t configure_axp2101_pmu_common(ii2c_device_handle_t dev) {
       readback.raw_bit4 != config.raw_bit4 ||
       readback.pwrok_restart_enabled != config.pwrok_restart_enabled ||
       readback.pwron_16s_shutdown_enabled != config.pwron_16s_shutdown_enabled) {
-    return II2C_ERR_INVALID_STATE;
+    return AXP2101_ERR_INVALID_STATE;
   }
 
   puts("AXP2101 PMU common configuration applied");
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
-static int32_t configure_axp2101_adc(ii2c_device_handle_t dev) {
+static int32_t configure_axp2101_adc(axp2101_t *pmic) {
   uint8_t adc_channels =
       AXP2101_ADC_EN_VSYS | AXP2101_ADC_EN_VBUS | AXP2101_ADC_EN_TS | AXP2101_ADC_EN_BATT;
-  int32_t err = axp2101_adc_enable_channels(dev, adc_channels);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = axp2101_adc_enable_channels(pmic, adc_channels);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   puts("AXP2101 ADC channels enabled");
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
-static int32_t apply_cores3_axp2101_startup(ii2c_device_handle_t dev) {
-  int32_t err = configure_axp2101_dcdc1(dev);
-  if (err != II2C_ERR_NONE) {
+static int32_t apply_cores3_axp2101_startup(axp2101_t *pmic) {
+  int32_t err = configure_axp2101_dcdc1(pmic);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = configure_axp2101_ldos(dev);
-  if (err != II2C_ERR_NONE) {
+  err = configure_axp2101_ldos(pmic);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = configure_axp2101_power_key(dev);
-  if (err != II2C_ERR_NONE) {
+  err = configure_axp2101_power_key(pmic);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = configure_axp2101_chgled(dev);
-  if (err != II2C_ERR_NONE) {
+  err = configure_axp2101_chgled(pmic);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  err = configure_axp2101_pmu_common(dev);
-  if (err != II2C_ERR_NONE) {
+  err = configure_axp2101_pmu_common(pmic);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
-  return configure_axp2101_adc(dev);
+  return configure_axp2101_adc(pmic);
 }
 
-static int32_t print_axp2101_summary(ii2c_device_handle_t dev) {
+static int32_t print_axp2101_summary(axp2101_t *pmic) {
   axp2101_status1_t status1 = {0};
-  int32_t err = axp2101_status1_get(dev, &status1);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = axp2101_status1_get(pmic, &status1);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   axp2101_status2_t status2 = {0};
-  err = axp2101_status2_get(dev, &status2);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_status2_get(pmic, &status2);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   uint16_t vbus_mv = 0;
-  err = axp2101_adc_vbus_read(dev, &vbus_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_adc_vbus_read(pmic, &vbus_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   uint16_t vsys_mv = 0;
-  err = axp2101_adc_vsys_read(dev, &vsys_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_adc_vsys_read(pmic, &vsys_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
   uint16_t vbat_mv = 0;
-  err = axp2101_adc_vbat_read(dev, &vbat_mv);
-  if (err != II2C_ERR_NONE) {
+  err = axp2101_adc_vbat_read(pmic, &vbat_mv);
+  if (err != AXP2101_ERR_NONE) {
     return err;
   }
 
@@ -1621,7 +1654,7 @@ static int32_t print_axp2101_summary(ii2c_device_handle_t dev) {
   printf("VSYS: %u mV\n", vsys_mv);
   printf("VBAT: %u mV\n", vbat_mv);
 
-  return II2C_ERR_NONE;
+  return AXP2101_ERR_NONE;
 }
 
 static TaskHandle_t main_task_handle;
@@ -1779,12 +1812,15 @@ void app_main(void) {
     return;
   }
 
-  err = attach_i2c_device(CORES3_AXP2101_I2C_ADDRESS, &axp2101);
+  err = attach_i2c_device(CORES3_AXP2101_I2C_ADDRESS, &axp2101_i2c);
   if (err != II2C_ERR_NONE) {
     printf("Failed to attach AXP2101: %s\n", ii2c_err_to_name(err));
     release_handles();
     return;
   }
+
+  axp2101_pmic.transport_write = axp2101_i2c_write;
+  axp2101_pmic.transport_write_read = axp2101_i2c_write_read;
 
   puts("Applying CoreS3 startup sequence with local components...");
 
@@ -1795,16 +1831,18 @@ void app_main(void) {
     return;
   }
 
-  err = apply_cores3_axp2101_startup(axp2101);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n", ii2c_err_to_name(err));
+  err = apply_cores3_axp2101_startup(&axp2101_pmic);
+  if (err != AXP2101_ERR_NONE) {
+    printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n",
+           axp2101_err_or_transport_to_name(err));
     release_handles();
     return;
   }
 
-  err = print_axp2101_summary(axp2101);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to read post-startup AXP2101 summary: %s\n", ii2c_err_to_name(err));
+  err = print_axp2101_summary(&axp2101_pmic);
+  if (err != AXP2101_ERR_NONE) {
+    printf("Failed to read post-startup AXP2101 summary: %s\n",
+           axp2101_err_or_transport_to_name(err));
     release_handles();
     return;
   }
@@ -2000,11 +2038,11 @@ void app_main(void) {
 
   uint16_t buttons_width = 80;
   uint16_t buttons_height = 50;
-  uint16_t buttons_x_offset = 10;
+  uint16_t buttons_x_offset = 5;
   uint16_t buttons_y_offset = 10;
   uint16_t buttons_x_margin = 10;
   rect_area_t button = {
-      .x0 = buttons_x_offset + buttons_x_margin,
+      .x0 = buttons_x_offset,
       .y0 = buttons_y_offset,
       .x1 = buttons_x_offset + buttons_width,
       .y1 = buttons_height,

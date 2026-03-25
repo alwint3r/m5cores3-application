@@ -1,4 +1,4 @@
-idf_component_register(SRCS "axp2101_espidf.c"
+idf_component_register(
+	SRCS "axp2101.c"
 	INCLUDE_DIRS include
-	REQUIRES ii2c
 )

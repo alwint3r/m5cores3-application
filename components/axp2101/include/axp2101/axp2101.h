@@ -1,15 +1,15 @@
 /**
  * @file axp2101.h
- * @brief Public AXP2101 register-access helpers built on top of `ii2c`.
+ * @brief Public AXP2101 register-access helpers built on abstract transport callbacks.
  * @ingroup axp2101
  */
 /**
  * @defgroup axp2101 AXP2101
- * @brief Public AXP2101 register-access helpers built on top of `ii2c`.
+ * @brief Public AXP2101 register-access helpers built on abstract transport callbacks.
  *
- * This component does not define a dedicated `axp2101` handle type. Callers
- * first attach the PMIC as an `ii2c_device_handle_t`, then pass that handle to
- * these helper functions.
+ * This component owns AXP2101 register communication and register decoding
+ * only. Applications provide callbacks that write register bytes and perform a
+ * combined write-then-read transaction.
  * @{
  */
 #pragma once
@@ -18,9 +18,61 @@
 extern "C" {
 #endif
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <ii2c/ii2c.h>
+
+/** @brief Success return code. */
+#define AXP2101_ERR_NONE 0
+/** @brief Base value for AXP2101-specific error codes. */
+#define AXP2101_ERR_BASE 0x3400
+#define AXP2101_ERR_FAIL (AXP2101_ERR_BASE + 1)          /*!< Generic failure */
+#define AXP2101_ERR_NO_MEM (AXP2101_ERR_BASE + 2)        /*!< Out of memory */
+#define AXP2101_ERR_INVALID_ARG (AXP2101_ERR_BASE + 3)   /*!< Invalid argument */
+#define AXP2101_ERR_INVALID_STATE (AXP2101_ERR_BASE + 4) /*!< Invalid state */
+#define AXP2101_ERR_NOT_FOUND (AXP2101_ERR_BASE + 5)     /*!< Resource not found */
+#define AXP2101_ERR_NOT_SUPPORTED (AXP2101_ERR_BASE + 6) /*!< Operation not supported */
+#define AXP2101_ERR_TIMEOUT (AXP2101_ERR_BASE + 7)       /*!< Operation timed out */
+#define AXP2101_ERR_IO (AXP2101_ERR_BASE + 8)            /*!< I/O failure */
+
+/**
+ * @brief Callback that writes raw bytes to the PMIC.
+ *
+ * The callback is used for direct register writes. The return value is passed
+ * through unchanged.
+ */
+typedef int32_t (*axp2101_transport_write)(const uint8_t *write_buffer, size_t write_size);
+
+/**
+ * @brief Callback that performs a combined write-then-read transaction.
+ *
+ * The callback should send `write_buffer`, then read up to `read_capacity`
+ * bytes into `read_buffer`, and finally store the actual byte count in
+ * `*read_size`.
+ */
+typedef int32_t (*axp2101_transport_write_read)(const uint8_t *write_buffer,
+                                                size_t write_size,
+                                                uint8_t *read_buffer,
+                                                size_t *read_size,
+                                                size_t read_capacity);
+
+typedef struct axp2101 axp2101_t;
+/** @brief Transport callback set used by the AXP2101 helper functions. */
+struct axp2101 {
+  /** @brief Raw write callback used by register writes. */
+  axp2101_transport_write transport_write;
+  /** @brief Required combined write-then-read callback for register reads. */
+  axp2101_transport_write_read transport_write_read;
+};
+
+/**
+ * @brief Return a stable string for an AXP2101 component error code.
+ *
+ * This helper only decodes `AXP2101_ERR_*` values. Transport-specific error
+ * codes returned by application callbacks are reported as
+ * `"AXP2101_ERR_UNKNOWN"`.
+ */
+const char *axp2101_err_to_name(int32_t err);
 
 typedef struct axp2101_status1_data axp2101_status1_t;
 /** @brief Decoded bit fields from `AXP2101_REG_PMU_STATUS1`. */
@@ -74,7 +126,7 @@ struct axp2101_dcdc_ctrl0_data {
  * @param out Output pointer that receives the decoded status fields.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_status1_get(ii2c_device_handle_t dev, axp2101_status1_t *out);
+int32_t axp2101_status1_get(axp2101_t *pmic, axp2101_status1_t *out);
 
 /** @brief Battery current direction reported by PMU Status 2 bits 6:5. */
 typedef enum axp2101_battery_current_direction {
@@ -129,7 +181,7 @@ struct axp2101_status2_data {
  * @param out Output pointer that receives the decoded status fields.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_status2_get(ii2c_device_handle_t dev, axp2101_status2_t *out);
+int32_t axp2101_status2_get(axp2101_t *pmic, axp2101_status2_t *out);
 
 typedef struct axp2101_fuel_gauge_data axp2101_fuel_gauge_t;
 /** @brief Decoded AXP2101 fuel-gauge state. */
@@ -155,7 +207,7 @@ struct axp2101_fuel_gauge_data {
  * @param dev Attached `ii2c` device handle for the AXP2101.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_fuel_gauge_enable(ii2c_device_handle_t dev);
+int32_t axp2101_fuel_gauge_enable(axp2101_t *pmic);
 
 /**
  * @brief Read the current decoded fuel-gauge state.
@@ -171,7 +223,7 @@ int32_t axp2101_fuel_gauge_enable(ii2c_device_handle_t dev);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the PMIC reports an impossible battery
  * percentage above 100, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_fuel_gauge_get(ii2c_device_handle_t dev, axp2101_fuel_gauge_t *out);
+int32_t axp2101_fuel_gauge_get(axp2101_t *pmic, axp2101_fuel_gauge_t *out);
 
 typedef struct axp2101_pmu_common_cfg_data axp2101_pmu_common_cfg_t;
 /** @brief Decoded fields from `AXP2101_REG_PMU_COMMON_CFG`. */
@@ -203,7 +255,7 @@ struct axp2101_pmu_common_cfg_data {
  * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out` is
  * `NULL`, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_pmu_common_cfg_get(ii2c_device_handle_t dev, axp2101_pmu_common_cfg_t *out);
+int32_t axp2101_pmu_common_cfg_get(axp2101_t *pmic, axp2101_pmu_common_cfg_t *out);
 
 /**
  * @brief Write `AXP2101_REG_PMU_COMMON_CFG` from a decoded struct.
@@ -218,7 +270,7 @@ int32_t axp2101_pmu_common_cfg_get(ii2c_device_handle_t dev, axp2101_pmu_common_
  * `NULL` or `raw_bits_7_6` exceeds the two-bit range, or an `II2C_ERR_*` code
  * from `ii2c`.
  */
-int32_t axp2101_pmu_common_cfg_set(ii2c_device_handle_t dev,
+int32_t axp2101_pmu_common_cfg_set(axp2101_t *pmic,
                                    const axp2101_pmu_common_cfg_t *config);
 
 /** @brief Power-key IRQ timing choices used by `AXP2101_REG_IRQ_OFF_ON_LEVEL` bits 5:4. */
@@ -276,7 +328,7 @@ struct axp2101_irq_off_on_level_data {
  * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out` is
  * `NULL`, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_irq_off_on_level_get(ii2c_device_handle_t dev, axp2101_irq_off_on_level_t *out);
+int32_t axp2101_irq_off_on_level_get(axp2101_t *pmic, axp2101_irq_off_on_level_t *out);
 
 /**
  * @brief Program selected fields in `AXP2101_REG_IRQ_OFF_ON_LEVEL`.
@@ -290,7 +342,7 @@ int32_t axp2101_irq_off_on_level_get(ii2c_device_handle_t dev, axp2101_irq_off_o
  * `NULL` or contains an out-of-range enum value, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_irq_off_on_level_set(ii2c_device_handle_t dev,
+int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic,
                                      const axp2101_irq_off_on_level_t *config);
 
 typedef struct axp2101_charger_current_data axp2101_charger_current_t;
@@ -319,7 +371,7 @@ struct axp2101_charger_current_data {
  * `NULL`, `II2C_ERR_INVALID_STATE` when any register contains an unsupported
  * selector value, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_charger_current_get(ii2c_device_handle_t dev, axp2101_charger_current_t *out);
+int32_t axp2101_charger_current_get(axp2101_t *pmic, axp2101_charger_current_t *out);
 
 /** @brief CHGLED function choices used by `AXP2101_REG_CHGLED_CTRL` bits 2:1. */
 typedef enum axp2101_chgled_function {
@@ -367,7 +419,7 @@ struct axp2101_chgled_ctrl_data {
  * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out` is
  * `NULL`, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_chgled_ctrl_get(ii2c_device_handle_t dev, axp2101_chgled_ctrl_t *out);
+int32_t axp2101_chgled_ctrl_get(axp2101_t *pmic, axp2101_chgled_ctrl_t *out);
 
 /**
  * @brief Program selected fields in `AXP2101_REG_CHGLED_CTRL`.
@@ -382,7 +434,7 @@ int32_t axp2101_chgled_ctrl_get(ii2c_device_handle_t dev, axp2101_chgled_ctrl_t 
  * `NULL` or contains an unsupported enum value, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_chgled_ctrl_set(ii2c_device_handle_t dev, const axp2101_chgled_ctrl_t *config);
+int32_t axp2101_chgled_ctrl_set(axp2101_t *pmic, const axp2101_chgled_ctrl_t *config);
 
 /**
  * @brief Enable one or more ADC measurement channels.
@@ -394,7 +446,7 @@ int32_t axp2101_chgled_ctrl_set(ii2c_device_handle_t dev, const axp2101_chgled_c
  * @param channels_bits Bitwise OR of `AXP2101_ADC_EN_*` values to enable.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_adc_enable_channels(ii2c_device_handle_t dev, uint8_t channels_bits);
+int32_t axp2101_adc_enable_channels(axp2101_t *pmic, uint8_t channels_bits);
 
 /**
  * @brief Disable one or more ADC measurement channels.
@@ -406,7 +458,7 @@ int32_t axp2101_adc_enable_channels(ii2c_device_handle_t dev, uint8_t channels_b
  * @param channels_bits Bitwise OR of `AXP2101_ADC_EN_*` values to disable.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_adc_disable_channels(ii2c_device_handle_t dev, uint8_t channels_bits);
+int32_t axp2101_adc_disable_channels(axp2101_t *pmic, uint8_t channels_bits);
 
 /**
  * @brief Read the decoded VBUS ADC value in millivolts.
@@ -418,7 +470,7 @@ int32_t axp2101_adc_disable_channels(ii2c_device_handle_t dev, uint8_t channels_
  * @param out_mv Output pointer that receives the decoded VBUS value in mV.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_adc_vbus_read(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_adc_vbus_read(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Read the decoded VSYS ADC value in millivolts.
@@ -430,7 +482,7 @@ int32_t axp2101_adc_vbus_read(ii2c_device_handle_t dev, uint16_t *out_mv);
  * @param out_mv Output pointer that receives the decoded VSYS value in mV.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_adc_vsys_read(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_adc_vsys_read(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Read the decoded VBAT ADC value in millivolts.
@@ -442,7 +494,7 @@ int32_t axp2101_adc_vsys_read(ii2c_device_handle_t dev, uint16_t *out_mv);
  * @param out_mv Output pointer that receives the decoded VBAT value in mV.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_adc_vbat_read(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_adc_vbat_read(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Enable one or more DCDC outputs controlled by `AXP2101_REG_DCDC_CTRL0`.
@@ -454,7 +506,7 @@ int32_t axp2101_adc_vbat_read(ii2c_device_handle_t dev, uint16_t *out_mv);
  * @param dcdc_bits Bitwise OR of `AXP2101_DCDC_CTRL0_EN_*` values to enable.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_dcdc_ctrl0_enable(ii2c_device_handle_t dev, uint8_t dcdc_bits);
+int32_t axp2101_dcdc_ctrl0_enable(axp2101_t *pmic, uint8_t dcdc_bits);
 
 /**
  * @brief Update one or more DCDC enable bits in `AXP2101_REG_DCDC_CTRL0`.
@@ -469,7 +521,7 @@ int32_t axp2101_dcdc_ctrl0_enable(ii2c_device_handle_t dev, uint8_t dcdc_bits);
  * @param dcdc_bits Replacement bit values applied under `mask`.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_dcdc_ctrl0_disable(ii2c_device_handle_t dev, uint8_t mask, uint8_t dcdc_bits);
+int32_t axp2101_dcdc_ctrl0_disable(axp2101_t *pmic, uint8_t mask, uint8_t dcdc_bits);
 
 /**
  * @brief Read and decode `AXP2101_REG_DCDC_CTRL0`.
@@ -482,7 +534,7 @@ int32_t axp2101_dcdc_ctrl0_disable(ii2c_device_handle_t dev, uint8_t mask, uint8
  * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out` is
  * `NULL`, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_dcdc_ctrl0_get(ii2c_device_handle_t dev, axp2101_dcdc_ctrl0_t *out);
+int32_t axp2101_dcdc_ctrl0_get(axp2101_t *pmic, axp2101_dcdc_ctrl0_t *out);
 
 /**
  * @brief Program the DCDC1 output voltage in millivolts.
@@ -499,7 +551,7 @@ int32_t axp2101_dcdc_ctrl0_get(ii2c_device_handle_t dev, axp2101_dcdc_ctrl0_t *o
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_dcdc1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_dcdc1_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured DCDC1 output voltage in millivolts.
@@ -515,7 +567,7 @@ int32_t axp2101_dcdc1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_dcdc1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_dcdc1_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Enable one or more LDO outputs controlled by `AXP2101_REG_LDO_CTRL0`.
@@ -527,7 +579,7 @@ int32_t axp2101_dcdc1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * @param ldo_bits Bitwise OR of `AXP2101_LDO_CTRL0_EN_*` values to enable.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_ldo_ctrl0_enable(ii2c_device_handle_t dev, uint8_t ldo_bits);
+int32_t axp2101_ldo_ctrl0_enable(axp2101_t *pmic, uint8_t ldo_bits);
 
 /**
  * @brief Update one or more LDO enable bits in `AXP2101_REG_LDO_CTRL0`.
@@ -542,7 +594,7 @@ int32_t axp2101_ldo_ctrl0_enable(ii2c_device_handle_t dev, uint8_t ldo_bits);
  * @param ldo_bits Replacement bit values applied under `mask`.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_ldo_ctrl0_disable(ii2c_device_handle_t dev, uint8_t mask, uint8_t ldo_bits);
+int32_t axp2101_ldo_ctrl0_disable(axp2101_t *pmic, uint8_t mask, uint8_t ldo_bits);
 
 /**
  * @brief Read and decode `AXP2101_REG_LDO_CTRL0`.
@@ -554,7 +606,7 @@ int32_t axp2101_ldo_ctrl0_disable(ii2c_device_handle_t dev, uint8_t mask, uint8_
  * @param out Output pointer that receives the decoded enable states.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_ldo_ctrl0_get(ii2c_device_handle_t dev, axp2101_ldo_ctrl0_t *out);
+int32_t axp2101_ldo_ctrl0_get(axp2101_t *pmic, axp2101_ldo_ctrl0_t *out);
 
 /**
  * @brief Program the ALDO1 output voltage in millivolts.
@@ -570,7 +622,7 @@ int32_t axp2101_ldo_ctrl0_get(ii2c_device_handle_t dev, axp2101_ldo_ctrl0_t *out
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_aldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_aldo1_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured ALDO1 output voltage in millivolts.
@@ -586,7 +638,7 @@ int32_t axp2101_aldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_aldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_aldo1_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Program the ALDO2 output voltage in millivolts.
@@ -601,7 +653,7 @@ int32_t axp2101_aldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_aldo2_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_aldo2_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured ALDO2 output voltage in millivolts.
@@ -617,7 +669,7 @@ int32_t axp2101_aldo2_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_aldo2_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_aldo2_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Program the ALDO3 output voltage in millivolts.
@@ -632,7 +684,7 @@ int32_t axp2101_aldo2_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_aldo3_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_aldo3_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured ALDO3 output voltage in millivolts.
@@ -648,7 +700,7 @@ int32_t axp2101_aldo3_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_aldo3_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_aldo3_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Program the ALDO4 output voltage in millivolts.
@@ -663,7 +715,7 @@ int32_t axp2101_aldo3_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_aldo4_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_aldo4_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured ALDO4 output voltage in millivolts.
@@ -679,7 +731,7 @@ int32_t axp2101_aldo4_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_aldo4_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_aldo4_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Program the BLDO1 output voltage in millivolts.
@@ -694,7 +746,7 @@ int32_t axp2101_aldo4_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_bldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_bldo1_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured BLDO1 output voltage in millivolts.
@@ -710,7 +762,7 @@ int32_t axp2101_bldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_bldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_bldo1_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Program the BLDO2 output voltage in millivolts.
@@ -725,7 +777,7 @@ int32_t axp2101_bldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_bldo2_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_bldo2_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured BLDO2 output voltage in millivolts.
@@ -741,7 +793,7 @@ int32_t axp2101_bldo2_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_bldo2_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_bldo2_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Program the DLDO1 output voltage in millivolts.
@@ -756,7 +808,7 @@ int32_t axp2101_bldo2_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * outside the supported range or step size, or an `II2C_ERR_*` code from
  * `ii2c`.
  */
-int32_t axp2101_dldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
+int32_t axp2101_dldo1_voltage_set(axp2101_t *pmic, uint16_t mv);
 
 /**
  * @brief Read back the configured DLDO1 output voltage in millivolts.
@@ -772,7 +824,7 @@ int32_t axp2101_dldo1_voltage_set(ii2c_device_handle_t dev, uint16_t mv);
  * `NULL`, `II2C_ERR_INVALID_STATE` when the register stores a reserved
  * selector, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_dldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
+int32_t axp2101_dldo1_voltage_get(axp2101_t *pmic, uint16_t *out_mv);
 
 /**
  * @brief Write one byte to an AXP2101 register.
@@ -782,7 +834,7 @@ int32_t axp2101_dldo1_voltage_get(ii2c_device_handle_t dev, uint16_t *out_mv);
  * @param value New byte value to store in the register.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_reg8_write(ii2c_device_handle_t dev, uint8_t reg, uint8_t value);
+int32_t axp2101_reg8_write(axp2101_t *pmic, uint8_t reg, uint8_t value);
 
 /**
  * @brief Read one byte from an AXP2101 register.
@@ -792,7 +844,7 @@ int32_t axp2101_reg8_write(ii2c_device_handle_t dev, uint8_t reg, uint8_t value)
  * @param out_value Output pointer that receives the register byte.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_reg8_read(ii2c_device_handle_t dev, uint8_t reg, uint8_t *out_value);
+int32_t axp2101_reg8_read(axp2101_t *pmic, uint8_t reg, uint8_t *out_value);
 
 /**
  * @brief Set one or more bits in an 8-bit AXP2101 register.
@@ -805,7 +857,7 @@ int32_t axp2101_reg8_read(ii2c_device_handle_t dev, uint8_t reg, uint8_t *out_va
  * @param bits Bit mask to force high.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_reg8_set_bits(ii2c_device_handle_t dev, uint8_t reg, uint8_t bits);
+int32_t axp2101_reg8_set_bits(axp2101_t *pmic, uint8_t reg, uint8_t bits);
 
 /**
  * @brief Update selected bits in an 8-bit AXP2101 register.
@@ -820,7 +872,7 @@ int32_t axp2101_reg8_set_bits(ii2c_device_handle_t dev, uint8_t reg, uint8_t bit
  * @param new_value Replacement value applied under `mask`.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_reg8_update_bits(ii2c_device_handle_t dev,
+int32_t axp2101_reg8_update_bits(axp2101_t *pmic,
                                  uint8_t reg,
                                  uint8_t mask,
                                  uint8_t new_value);
@@ -837,7 +889,7 @@ int32_t axp2101_reg8_update_bits(ii2c_device_handle_t dev,
  * @param out_value Output pointer that receives the decoded 14-bit value.
  * @return `II2C_ERR_NONE` on success, or an `II2C_ERR_*` code from `ii2c`.
  */
-int32_t axp2101_reg14_read(ii2c_device_handle_t dev, uint8_t reg, uint16_t *out_value);
+int32_t axp2101_reg14_read(axp2101_t *pmic, uint8_t reg, uint16_t *out_value);
 
 #ifdef __cplusplus
 }
