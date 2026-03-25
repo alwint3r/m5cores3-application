@@ -55,12 +55,13 @@ static const uint8_t CORES3_AW9523B_TOUCH_RST_PIN = 0;
 static const int CORES3_I2C_INT_PIN = 21;
 
 static ii2c_master_bus_handle_t sys_i2c = NULL;
-static ii2c_device_handle_t aw9523b = NULL;
+static ii2c_device_handle_t aw9523b_i2c = NULL;
 static ii2c_device_handle_t axp2101_i2c = NULL;
 static ispi_master_bus_handle_t lcd_spi = NULL;
 static ispi_device_handle_t lcd = NULL;
 static ii2c_device_handle_t ft6336_i2c = NULL;
 static bool lcd_dc_gpio_configured = false;
+static aw9523b_t aw9523b_expander = {0};
 static axp2101_t axp2101_pmic = {0};
 static ft6x36_t ft6336;
 
@@ -91,6 +92,17 @@ static const char *bool_to_yes_no(bool value) {
 static const char *touch_err_to_name(int32_t err) {
   if (err >= FT6X36_ERR_BASE && err < (FT6X36_ERR_BASE + 0x100)) {
     return ft6x36_err_to_name(err);
+  }
+  if (err >= AW9523B_ERR_BASE && err < (AW9523B_ERR_BASE + 0x100)) {
+    return aw9523b_err_to_name(err);
+  }
+
+  return ii2c_err_to_name(err);
+}
+
+static const char *aw9523b_err_or_transport_to_name(int32_t err) {
+  if (err >= AW9523B_ERR_BASE && err < (AW9523B_ERR_BASE + 0x100)) {
+    return aw9523b_err_to_name(err);
   }
 
   return ii2c_err_to_name(err);
@@ -131,10 +143,12 @@ static void release_handles(void) {
     lcd_dc_gpio_configured = false;
   }
 
-  if (aw9523b != NULL) {
-    (void)ii2c_del_device(aw9523b);
-    aw9523b = NULL;
+  if (aw9523b_i2c != NULL) {
+    (void)ii2c_del_device(aw9523b_i2c);
+    aw9523b_i2c = NULL;
   }
+  aw9523b_expander.transport_write = NULL;
+  aw9523b_expander.transport_write_read = NULL;
 
   if (axp2101_i2c != NULL) {
     (void)ii2c_del_device(axp2101_i2c);
@@ -220,22 +234,23 @@ static int32_t lcd_write_data(const uint8_t *bytes, size_t len) {
 }
 
 static int32_t lcd_hard_reset(void) {
-  int32_t err =
-      aw9523b_level_set(aw9523b, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 0);
-  if (err != II2C_ERR_NONE) {
+  int32_t err = aw9523b_level_set(
+      &aw9523b_expander, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 0);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
   delay_ms(20);
 
-  err = aw9523b_level_set(aw9523b, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
-  if (err != II2C_ERR_NONE) {
+  err = aw9523b_level_set(
+      &aw9523b_expander, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
   delay_ms(120);
   puts("LCD hard reset complete");
-  return II2C_ERR_NONE;
+  return AW9523B_ERR_NONE;
 }
 
 static inline void lcd_color_to_u8_array(uint8_t *dst, uint16_t color) {
@@ -1328,6 +1343,29 @@ static int32_t attach_i2c_device(uint16_t address, ii2c_device_handle_t *out_dev
   return ii2c_new_device(sys_i2c, &dev_cfg, out_device);
 }
 
+static int32_t aw9523b_i2c_write(const uint8_t *write_buffer, size_t write_size) {
+  return ii2c_master_transmit(aw9523b_i2c, write_buffer, write_size);
+}
+
+static int32_t aw9523b_i2c_write_read(const uint8_t *write_buffer,
+                                      size_t write_size,
+                                      uint8_t *read_buffer,
+                                      size_t *read_size,
+                                      size_t read_capacity) {
+  if (!read_buffer || !read_size) {
+    return II2C_ERR_INVALID_ARG;
+  }
+
+  int32_t err = ii2c_master_transmit_receive(
+      aw9523b_i2c, write_buffer, write_size, read_buffer, read_capacity);
+  if (err != II2C_ERR_NONE) {
+    return err;
+  }
+
+  *read_size = read_capacity;
+  return II2C_ERR_NONE;
+}
+
 static int32_t axp2101_i2c_write(const uint8_t *write_buffer, size_t write_size) {
   return ii2c_master_transmit(axp2101_i2c, write_buffer, write_size);
 }
@@ -1351,33 +1389,34 @@ static int32_t axp2101_i2c_write_read(const uint8_t *write_buffer,
   return II2C_ERR_NONE;
 }
 
-static int32_t configure_aw9523b_boost_enable(ii2c_device_handle_t dev) {
-  int32_t err = aw9523b_port_dir_set(dev,
+static int32_t configure_aw9523b_boost_enable(aw9523b_t *expander) {
+  int32_t err = aw9523b_port_dir_set(expander,
                                      CORES3_AW9523B_BOOST_EN_PORT,
                                      CORES3_AW9523B_BOOST_EN_PIN,
                                      AW9523B_PORT_DIRECTION_OUTPUT);
-  if (err != II2C_ERR_NONE) {
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
-  err = aw9523b_level_set(dev, CORES3_AW9523B_BOOST_EN_PORT, CORES3_AW9523B_BOOST_EN_PIN, 1);
-  if (err != II2C_ERR_NONE) {
+  err = aw9523b_level_set(
+      expander, CORES3_AW9523B_BOOST_EN_PORT, CORES3_AW9523B_BOOST_EN_PIN, 1);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
   uint8_t boost_en_level = 0;
   err = aw9523b_level_get(
-      dev, CORES3_AW9523B_BOOST_EN_PORT, CORES3_AW9523B_BOOST_EN_PIN, &boost_en_level);
-  if (err != II2C_ERR_NONE) {
+      expander, CORES3_AW9523B_BOOST_EN_PORT, CORES3_AW9523B_BOOST_EN_PIN, &boost_en_level);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
   if (boost_en_level == 0) {
-    return II2C_ERR_INVALID_STATE;
+    return AW9523B_ERR_INVALID_STATE;
   }
 
   puts("AW9523B BOOST_EN asserted");
-  return II2C_ERR_NONE;
+  return AW9523B_ERR_NONE;
 }
 
 static int32_t configure_axp2101_ldos(axp2101_t *pmic) {
@@ -1693,38 +1732,39 @@ static int32_t ft6336_i2c_write_read(const uint8_t *write_buffer,
 }
 
 static int32_t configure_touch_screen(void) {
-  int32_t err = aw9523b_port_dir_set(aw9523b,
+  int32_t err = aw9523b_port_dir_set(&aw9523b_expander,
                                      CORES3_AW9523B_TOUCH_INT_PORT,
                                      CORES3_AW9523B_TOUCH_INT_PIN,
                                      AW9523B_PORT_DIRECTION_INPUT);
-  if (err != II2C_ERR_NONE) {
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
-  err = aw9523b_port_dir_set(aw9523b,
+  err = aw9523b_port_dir_set(&aw9523b_expander,
                              CORES3_AW9523B_TOUCH_RST_PORT,
                              CORES3_AW9523B_TOUCH_RST_PIN,
                              AW9523B_PORT_DIRECTION_OUTPUT);
-  if (err != II2C_ERR_NONE) {
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
-  err = aw9523b_level_set(aw9523b, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
-  if (err != II2C_ERR_NONE) {
+  err = aw9523b_level_set(
+      &aw9523b_expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
   uint8_t pin_level;
   err = aw9523b_level_get(
-      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, &pin_level);
-  if (err != II2C_ERR_NONE) {
+      &aw9523b_expander, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, &pin_level);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
   (void)pin_level;
 
   err = aw9523b_interrupt_set(
-      aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, true);
-  if (err != II2C_ERR_NONE) {
+      &aw9523b_expander, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, true);
+  if (err != AW9523B_ERR_NONE) {
     return err;
   }
 
@@ -1805,7 +1845,7 @@ void app_main(void) {
     return;
   }
 
-  err = attach_i2c_device(CORES3_AW9523B_I2C_ADDRESS, &aw9523b);
+  err = attach_i2c_device(CORES3_AW9523B_I2C_ADDRESS, &aw9523b_i2c);
   if (err != II2C_ERR_NONE) {
     printf("Failed to attach AW9523B: %s\n", ii2c_err_to_name(err));
     release_handles();
@@ -1819,14 +1859,16 @@ void app_main(void) {
     return;
   }
 
+  aw9523b_expander.transport_write = aw9523b_i2c_write;
+  aw9523b_expander.transport_write_read = aw9523b_i2c_write_read;
   axp2101_pmic.transport_write = axp2101_i2c_write;
   axp2101_pmic.transport_write_read = axp2101_i2c_write_read;
 
   puts("Applying CoreS3 startup sequence with local components...");
 
-  err = configure_aw9523b_boost_enable(aw9523b);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to assert AW9523B BOOST_EN: %s\n", ii2c_err_to_name(err));
+  err = configure_aw9523b_boost_enable(&aw9523b_expander);
+  if (err != AW9523B_ERR_NONE) {
+    printf("Failed to assert AW9523B BOOST_EN: %s\n", aw9523b_err_or_transport_to_name(err));
     release_handles();
     return;
   }
@@ -1849,19 +1891,20 @@ void app_main(void) {
 
   puts("CoreS3 startup sequence complete.");
 
-  err = aw9523b_port_dir_set(aw9523b,
+  err = aw9523b_port_dir_set(&aw9523b_expander,
                              CORES3_AW9523B_LCD_RST_PORT,
                              CORES3_AW9523B_LCD_RST_PIN,
                              AW9523B_PORT_DIRECTION_OUTPUT);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to set direction of the LCD reset pin: %s\n", ii2c_err_to_name(err));
+  if (err != AW9523B_ERR_NONE) {
+    printf("Failed to set direction of the LCD reset pin: %s\n", aw9523b_err_or_transport_to_name(err));
     release_handles();
     return;
   }
 
-  err = aw9523b_level_set(aw9523b, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to set LCD RST logic to high: %s\n", ii2c_err_to_name(err));
+  err = aw9523b_level_set(
+      &aw9523b_expander, CORES3_AW9523B_LCD_RST_PORT, CORES3_AW9523B_LCD_RST_PIN, 1);
+  if (err != AW9523B_ERR_NONE) {
+    printf("Failed to set LCD RST logic to high: %s\n", aw9523b_err_or_transport_to_name(err));
     release_handles();
     return;
   }
@@ -1916,8 +1959,8 @@ void app_main(void) {
   }
 
   err = lcd_hard_reset();
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to hard-reset LCD: %ld\n", (long)err);
+  if (err != AW9523B_ERR_NONE) {
+    printf("Failed to hard-reset LCD: %s (%ld)\n", aw9523b_err_or_transport_to_name(err), (long)err);
     release_handles();
     return;
   }
@@ -2092,9 +2135,10 @@ void app_main(void) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     uint8_t input_value = 0;
 
-    err = aw9523b_port_input_read(aw9523b, CORES3_AW9523B_TOUCH_INT_PORT, &input_value);
-    if (err != II2C_ERR_NONE) {
-      printf("Failed to read AW9523B register for PORT1 input data: %s\n", ii2c_err_to_name(err));
+    err = aw9523b_port_input_read(&aw9523b_expander, CORES3_AW9523B_TOUCH_INT_PORT, &input_value);
+    if (err != AW9523B_ERR_NONE) {
+      printf("Failed to read AW9523B register for PORT1 input data: %s\n",
+             aw9523b_err_or_transport_to_name(err));
       continue;
     }
 
