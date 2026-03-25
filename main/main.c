@@ -22,8 +22,11 @@
 #include "graphics/fonts/open_sans_regular_32_4bpp.h"
 #include "graphics/text_renderer.h"
 #include "graphics/bitmap_icon.h"
+
 #define IMG2BITMAP_DECLARE_GRAPHICS_BITMAP_ICON
+#include "graphics/icons/icon_reboot_4bpp.h"
 #include "graphics/icons/icon_wifi_connected_4bpp.h"
+#include "graphics/icons/icon_wifi_disconnected_4bpp.h"
 
 typedef struct {
   aw9523b_t io_expander;
@@ -38,31 +41,6 @@ static app_t app;
 static cores3_display_t board_display = {0};
 static display_surface_t app_surface = {0};
 static TaskHandle_t main_task_handle = NULL;
-
-static int32_t draw_rounded_button(display_surface_t *surface,
-                                   bmf_font_view_t *font,
-                                   const graphics_rect_t *box,
-                                   const char *label,
-                                   uint16_t fill_color,
-                                   uint16_t text_color) {
-  int32_t err = graphics_fill_round_rect_r6(surface, box, fill_color);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  int16_t label_y = graphics_text_center_baseline_y(font, box);
-
-  return graphics_draw_text_bounded(surface,
-                                    font,
-                                    label,
-                                    (int16_t)(box->x0 + 12),
-                                    label_y,
-                                    box,
-                                    text_color,
-                                    fill_color,
-                                    NULL,
-                                    NULL);
-}
 
 void app_main(void) {
   main_task_handle = xTaskGetCurrentTaskHandle();
@@ -144,8 +122,10 @@ void app_main(void) {
   }
 
   char free_heap_str[64] = {0};
-  snprintf(
-      free_heap_str, sizeof(free_heap_str), "Heap: %lu B", (unsigned long)esp_get_free_heap_size());
+  snprintf(free_heap_str,
+           sizeof(free_heap_str),
+           "Free Heap %lu B",
+           (unsigned long)esp_get_free_heap_size());
 
   uint16_t status_bar_rect_height = 32;
   graphics_rect_t status_bar_rect = {
@@ -170,21 +150,34 @@ void app_main(void) {
     return;
   }
 
+  graphics_rect_t wifi_status_rect = {
+      .x0 = status_bar_rect.x1 - icon_wifi_disconnected.width - 5,
+      .y0 = status_bar_rect.y0 + 5,
+      .x1 = status_bar_rect.x1 - 5,
+      .y1 = status_bar_rect.y1 - 5,
+  };
+
+  int16_t wifi_icon_x;
+  int16_t wifi_icon_y;
+  graphics_bitmap_icon_center_position(
+      &icon_wifi_disconnected, &wifi_status_rect, &wifi_icon_x, &wifi_icon_y);
+
   err = graphics_draw_bitmap_icon(&app_surface,
-                                  &icon_wifi_connected,
-                                  cores3_display_width() - icon_wifi_connected.width - 10,
-                                  cores3_display_height() - icon_wifi_connected.height - 5,
-                                  &status_bar_rect,
+                                  &icon_wifi_disconnected,
+                                  wifi_icon_x,
+                                  wifi_icon_y,
+                                  &wifi_status_rect,
                                   0x0000,
                                   status_bar_rect_color);
 
-  int16_t x = status_bar_rect.x0 + status_bar_left_margin;
-  int16_t y = (int16_t)graphics_text_center_baseline_y(&opensans_16, &status_bar_rect);
+  int16_t free_heap_text_x = status_bar_rect.x0 + status_bar_left_margin;
+  int16_t free_heap_text_y =
+      (int16_t)graphics_text_center_baseline_y(&opensans_16, &status_bar_rect);
   err = graphics_draw_text_bounded(&app_surface,
                                    &opensans_16,
                                    free_heap_str,
-                                   x,
-                                   y,
+                                   free_heap_text_x,
+                                   free_heap_text_y,
                                    &status_bar_rect,
                                    text_color,
                                    status_bar_rect_color,
@@ -202,15 +195,23 @@ void app_main(void) {
 
   graphics_rect_t bounding = {
       .x0 = 10,
-      .y0 = 64,
+      .y0 = 36,
       .x1 = (int16_t)(cores3_display_width() - 10U),
-      .y1 = (int16_t)(cores3_display_height() - 30U),
+      .y1 = (int16_t)(status_bar_rect.y0 - 10),
   };
-  x = bounding.x0;
-  y = graphics_text_first_baseline_y(&opensans_32, &bounding);
+  free_heap_text_x = bounding.x0;
+  free_heap_text_y = graphics_text_first_baseline_y(&opensans_32, &bounding);
   for (size_t i = 0; i < strlen(msg2); i++) {
-    err = graphics_draw_char_bounded(
-        &app_surface, &opensans_32, msg2[i], x, y, &bounding, text_color, display_bg_color, &x, &y);
+    err = graphics_draw_char_bounded(&app_surface,
+                                     &opensans_32,
+                                     msg2[i],
+                                     free_heap_text_x,
+                                     free_heap_text_y,
+                                     &bounding,
+                                     text_color,
+                                     display_bg_color,
+                                     &free_heap_text_x,
+                                     &free_heap_text_y);
     if (err != ILI9342_ERR_NONE) {
       break;
     }
@@ -220,63 +221,48 @@ void app_main(void) {
     return;
   }
 
-  uint16_t buttons_width = 80;
-  uint16_t buttons_height = 50;
+  uint16_t buttons_width = 32;
+  uint16_t buttons_height = 32;
   uint16_t buttons_x_offset = 5;
-  uint16_t buttons_y_offset = 10;
-  uint16_t buttons_x_margin = 10;
-  graphics_rect_t button = {
-      .x0 = (int16_t)buttons_x_offset,
+  uint16_t buttons_y_offset = 5;
+  uint16_t buttons_x_margin = 5;
+  uint16_t reboot_button_color = display_bg_color;
+  graphics_rect_t button_rect = {
+      .x0 = (int16_t)(cores3_display_width() - buttons_width - buttons_x_margin),
       .y0 = (int16_t)buttons_y_offset,
-      .x1 = (int16_t)(buttons_x_offset + buttons_width),
+      .x1 = (int16_t)(cores3_display_width() - buttons_x_offset),
       .y1 = (int16_t)buttons_height,
   };
 
-  err = graphics_fill_round_rect_r6(&app_surface, &button, 0x001F);
+  err = graphics_fill_round_rect_r6(&app_surface, &button_rect, reboot_button_color);
   if (err != ILI9342_ERR_NONE) {
     printf(
         "Failed to draw first button background: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     return;
   }
 
-  int16_t label_y = graphics_text_center_baseline_y(&opensans_16, &button);
-  err = graphics_draw_text_bounded(&app_surface,
-                                   &opensans_16,
-                                   "Tap me",
-                                   (int16_t)(button.x0 + 15),
-                                   label_y,
-                                   &button,
-                                   0xFFFF,
-                                   0x001F,
-                                   NULL,
-                                   NULL);
+  int16_t reboot_icon_x = 0;
+  int16_t reboot_icon_y = 0;
+  err = graphics_bitmap_icon_center_position(
+      &icon_reboot, &button_rect, &reboot_icon_x, &reboot_icon_y);
+  if (err != ILI9342_ERR_NONE) {
+    printf("Failed to compute first button icon position: %s (%ld)\n",
+           ili9342_err_to_name(err),
+           (long)err);
+    return;
+  }
+
+  err = graphics_draw_bitmap_icon(&app_surface,
+                                  &icon_reboot,
+                                  reboot_icon_x,
+                                  reboot_icon_y,
+                                  &button_rect,
+                                  graphics_rgb888_to_rgb565(255, 0, 0),
+                                  reboot_button_color);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to draw first button label: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
     return;
   }
-
-  buttons_x_offset += buttons_width;
-  graphics_rect_t another = {
-      .x0 = (int16_t)(buttons_x_offset + buttons_x_margin),
-      .y0 = (int16_t)buttons_y_offset,
-      .x1 = (int16_t)(buttons_x_offset + buttons_width),
-      .y1 = (int16_t)buttons_height,
-  };
-  err = draw_rounded_button(&app_surface, &opensans_16, &another, "Also me", 0xFFFF, 0x0000);
-  if (err != ILI9342_ERR_NONE) {
-    printf("Failed to draw second button: %s (%ld)\n", ili9342_err_to_name(err), (long)err);
-    return;
-  }
-
-  buttons_x_offset += buttons_width;
-  err = graphics_fill_round_rect_r6_top(&app_surface,
-                                        &(const graphics_rect_t){
-                                            .x0 = (int16_t)(buttons_x_offset + buttons_x_margin),
-                                            .y0 = (int16_t)buttons_y_offset,
-                                            .x1 = (int16_t)(buttons_x_offset + buttons_width),
-                                            .y1 = (int16_t)buttons_height,
-                                        },
-                                        0xFF08);
 
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -315,12 +301,8 @@ void app_main(void) {
 
       switch (out_touch.points[count].event) {
         case FT6X36_TOUCH_EVENT_PRESS_DOWN:
-          if (graphics_rect_contains_point(&button, touch_x, touch_y)) {
-            ESP_LOGI("MAIN", "Button is touched!");
-          }
-
-          if (graphics_rect_contains_point(&another, touch_x, touch_y)) {
-            ESP_LOGI("MAIN", "Another button is touched!");
+          if (graphics_rect_contains_point(&button_rect, touch_x, touch_y)) {
+            esp_restart();
           }
 
         default:

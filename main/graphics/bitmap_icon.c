@@ -43,6 +43,33 @@ static uint16_t color_from_coverage(uint16_t background_color,
   return graphics_blend_rgb565(background_color, foreground_color, coverage);
 }
 
+int32_t graphics_bitmap_icon_center_position(const graphics_bitmap_icon_t *icon,
+                                             const graphics_rect_t *bounding,
+                                             int16_t *x,
+                                             int16_t *y) {
+  if (!graphics_bitmap_icon_is_valid(icon) || bounding == NULL || x == NULL || y == NULL ||
+      bounding->x1 < bounding->x0 || bounding->y1 < bounding->y0) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int32_t bounding_width = (int32_t)bounding->x1 - (int32_t)bounding->x0 + 1;
+  int32_t bounding_height = (int32_t)bounding->y1 - (int32_t)bounding->y0 + 1;
+
+  int32_t offset_x = 0;
+  if (bounding_width > icon->width) {
+    offset_x = (bounding_width - (int32_t)icon->width) / 2;
+  }
+
+  int32_t offset_y = 0;
+  if (bounding_height > icon->height) {
+    offset_y = (bounding_height - (int32_t)icon->height) / 2;
+  }
+
+  *x = (int16_t)(bounding->x0 + offset_x);
+  *y = (int16_t)(bounding->y0 + offset_y);
+  return ILI9342_ERR_NONE;
+}
+
 int32_t graphics_draw_bitmap_icon(display_surface_t *surface,
                                   const graphics_bitmap_icon_t *icon,
                                   int16_t x,
