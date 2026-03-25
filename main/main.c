@@ -12,6 +12,7 @@
 #include <esp_log.h>
 #include <esp_system.h>
 
+#include "cores3_board.h"
 #include "cores3_io_extender.h"
 #include "cores3_power_mgmt.h"
 #include "cores3_touch.h"
@@ -22,17 +23,6 @@
 #include "graphics/fonts/open_sans_regular_32_4bpp.h"
 #include "graphics/text_renderer.h"
 
-static const int32_t SYS_I2C_SDA = 12;
-static const int32_t SYS_I2C_SCL = 11;
-
-static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
-static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
-static const uint16_t CORES3_FT6336_I2C_ADDRESS = 0x38;
-
-static ii2c_master_bus_handle_t sys_i2c = NULL;
-static ii2c_device_handle_t aw9523b_i2c = NULL;
-static ii2c_device_handle_t axp2101_i2c = NULL;
-static ii2c_device_handle_t ft6336_i2c = NULL;
 static aw9523b_t aw9523b_expander = {0};
 static axp2101_t axp2101_pmic = {0};
 static ft6x36_t ft6336 = {0};
@@ -40,79 +30,39 @@ static cores3_display_t board_display = {0};
 static display_surface_t app_surface = {0};
 static TaskHandle_t main_task_handle = NULL;
 
+static cores3_board_t cores3;
+
 static void release_handles(void) {
   display_surface_deinit(&app_surface);
   cores3_display_deinit(&board_display);
   cores3_touch_deinit(&ft6336);
   cores3_io_extender_deinit(&aw9523b_expander);
-
-  if (ft6336_i2c != NULL) {
-    (void)ii2c_del_device(ft6336_i2c);
-    ft6336_i2c = NULL;
-  }
-
-  if (axp2101_i2c != NULL) {
-    (void)ii2c_del_device(axp2101_i2c);
-    axp2101_i2c = NULL;
-  }
-
-  if (aw9523b_i2c != NULL) {
-    (void)ii2c_del_device(aw9523b_i2c);
-    aw9523b_i2c = NULL;
-  }
-  axp2101_pmic.transport_write = NULL;
-  axp2101_pmic.transport_write_read = NULL;
-
-  if (sys_i2c != NULL) {
-    (void)ii2c_del_master_bus(sys_i2c);
-    sys_i2c = NULL;
-  }
 }
 
-static int32_t create_i2c_bus(void) {
-  ii2c_master_bus_config_t bus_cfg;
-  ii2c_get_default_master_bus_config(&bus_cfg);
-
-  bus_cfg.sda_io_num = SYS_I2C_SDA;
-  bus_cfg.scl_io_num = SYS_I2C_SCL;
-  bus_cfg.enable_internal_pullup = true;
-
-  return ii2c_new_master_bus(&bus_cfg, &sys_i2c);
-}
-
-static int32_t probe_i2c_device(const char *label, uint16_t address) {
-  int32_t err = ii2c_master_probe(sys_i2c, address, 3000);
-  if (err == II2C_ERR_NONE) {
-    printf("%s responded at 0x%02X\n", label, address);
+static int32_t axp2101_i2c_write(void *context,
+                                 const uint8_t *write_buffer,
+                                 size_t write_size) {
+  ii2c_device_handle_t device = (ii2c_device_handle_t)context;
+  if (device == NULL) {
+    return II2C_ERR_INVALID_ARG;
   }
-  return err;
+
+  return ii2c_master_transmit(device, write_buffer, write_size);
 }
 
-static int32_t attach_i2c_device(uint16_t address, ii2c_device_handle_t *out_device) {
-  ii2c_device_config_t dev_cfg;
-  ii2c_get_default_device_config(&dev_cfg);
-
-  dev_cfg.device_address = address;
-  dev_cfg.timeout_ms = 3000;
-
-  return ii2c_new_device(sys_i2c, &dev_cfg, out_device);
-}
-
-static int32_t axp2101_i2c_write(const uint8_t *write_buffer, size_t write_size) {
-  return ii2c_master_transmit(axp2101_i2c, write_buffer, write_size);
-}
-
-static int32_t axp2101_i2c_write_read(const uint8_t *write_buffer,
+static int32_t axp2101_i2c_write_read(void *context,
+                                      const uint8_t *write_buffer,
                                       size_t write_size,
                                       uint8_t *read_buffer,
                                       size_t *read_size,
                                       size_t read_capacity) {
-  if (!read_buffer || !read_size) {
+  ii2c_device_handle_t device = (ii2c_device_handle_t)context;
+  if (device == NULL || !read_buffer || !read_size) {
     return II2C_ERR_INVALID_ARG;
   }
 
   int32_t err = ii2c_master_transmit_receive(
-      axp2101_i2c, write_buffer, write_size, read_buffer, read_capacity);
+      device, write_buffer, write_size, read_buffer, read_capacity);
   if (err != II2C_ERR_NONE) {
     return err;
   }
@@ -149,48 +99,20 @@ static int32_t draw_rounded_button(display_surface_t *surface,
 void app_main(void) {
   main_task_handle = xTaskGetCurrentTaskHandle();
 
-  int32_t err = create_i2c_bus();
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to initialize system I2C bus: %s\n", ii2c_err_to_name(err));
-    release_handles();
+  int32_t err = cores3_board_init(&cores3);
+  if (err != 0) {
+    printf("Failed to initialize system I2C bus: %ld\n", (long)err);
     return;
   }
 
-  err = probe_i2c_device("AW9523B", CORES3_AW9523B_I2C_ADDRESS);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to probe AW9523B: %s\n", ii2c_err_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = probe_i2c_device("AXP2101", CORES3_AXP2101_I2C_ADDRESS);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to probe AXP2101: %s\n", ii2c_err_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = attach_i2c_device(CORES3_AW9523B_I2C_ADDRESS, &aw9523b_i2c);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to attach AW9523B: %s\n", ii2c_err_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = cores3_io_extender_init(aw9523b_i2c, &aw9523b_expander);
+  err = cores3_io_extender_init(cores3.i2c_aw9523b, &aw9523b_expander);
   if (err != 0) {
     printf("Failed to initialize AW9523B: %s\n", cores3_io_extender_err_to_name(err));
     release_handles();
     return;
   }
 
-  err = attach_i2c_device(CORES3_AXP2101_I2C_ADDRESS, &axp2101_i2c);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to attach AXP2101: %s\n", ii2c_err_to_name(err));
-    release_handles();
-    return;
-  }
-
+  axp2101_pmic.transport_context = cores3.i2c_axp2101;
   axp2101_pmic.transport_write = axp2101_i2c_write;
   axp2101_pmic.transport_write_read = axp2101_i2c_write_read;
 
@@ -209,14 +131,7 @@ void app_main(void) {
     return;
   }
 
-  err = attach_i2c_device(CORES3_FT6336_I2C_ADDRESS, &ft6336_i2c);
-  if (err != II2C_ERR_NONE) {
-    printf("Failed to attach FT6336: %s\n", ii2c_err_to_name(err));
-    release_handles();
-    return;
-  }
-
-  err = cores3_touch_init(ft6336_i2c, &aw9523b_expander, &ft6336);
+  err = cores3_touch_init(cores3.i2c_ft6336, &aw9523b_expander, &ft6336);
   if (err != FT6X36_ERR_NONE) {
     printf("Failed to configure the touch screen: %s (%ld)\n",
            cores3_touch_err_to_name(err),

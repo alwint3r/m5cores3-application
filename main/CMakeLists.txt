@@ -8,6 +8,7 @@ idf_component_register(
 		"graphics/text_renderer.c"
 		"cores3_power_mgmt.c"
 		"cores3_touch.c"
+		"cores3_board.c"
   INCLUDE_DIRS "."
 	REQUIRES
 	ii2c

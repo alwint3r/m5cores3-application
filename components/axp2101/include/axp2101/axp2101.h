@@ -41,7 +41,9 @@ extern "C" {
  * The callback is used for direct register writes. The return value is passed
  * through unchanged.
  */
-typedef int32_t (*axp2101_transport_write)(const uint8_t *write_buffer, size_t write_size);
+typedef int32_t (*axp2101_transport_write)(void *context,
+                                           const uint8_t *write_buffer,
+                                           size_t write_size);
 
 /**
  * @brief Callback that performs a combined write-then-read transaction.
@@ -50,7 +52,8 @@ typedef int32_t (*axp2101_transport_write)(const uint8_t *write_buffer, size_t w
  * bytes into `read_buffer`, and finally store the actual byte count in
  * `*read_size`.
  */
-typedef int32_t (*axp2101_transport_write_read)(const uint8_t *write_buffer,
+typedef int32_t (*axp2101_transport_write_read)(void *context,
+                                                const uint8_t *write_buffer,
                                                 size_t write_size,
                                                 uint8_t *read_buffer,
                                                 size_t *read_size,
@@ -59,6 +62,8 @@ typedef int32_t (*axp2101_transport_write_read)(const uint8_t *write_buffer,
 typedef struct axp2101 axp2101_t;
 /** @brief Transport callback set used by the AXP2101 helper functions. */
 struct axp2101 {
+  /** @brief Opaque caller-owned transport state passed back to callbacks. */
+  void *transport_context;
   /** @brief Raw write callback used by register writes. */
   axp2101_transport_write transport_write;
   /** @brief Required combined write-then-read callback for register reads. */

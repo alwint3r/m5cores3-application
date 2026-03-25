@@ -1,6 +1,6 @@
 # axp2101
 
-`axp2101` is a small helper component for the AXP2101 PMIC used in this repository. It owns AXP2101 register access and register decoding only. Applications provide transport callbacks for raw writes and combined write-then-read transfers, so the component is no longer tied directly to `ii2c`.
+`axp2101` is a small helper component for the AXP2101 PMIC used in this repository. It owns AXP2101 register access and register decoding only. Applications provide transport callbacks for raw writes and combined write-then-read transfers plus an opaque callback context, so the component is no longer tied directly to `ii2c`.
 
 ## Public Files
 
@@ -24,6 +24,7 @@ Consumers include the public headers as:
 
 The public API centers on `axp2101_t`, a small callback holder:
 
+- `transport_context` stores caller-owned state that is passed back to each transport callback.
 - `transport_write` sends raw bytes for direct register writes.
 - `transport_write_read` sends register-address bytes, reads back data bytes, and reports the actual read length.
 
@@ -51,23 +52,30 @@ The component itself does not depend on `ii2c`, but the application can still ad
 #include "ii2c/ii2c.h"
 #include "axp2101/axp2101.h"
 
-static ii2c_device_handle_t s_axp2101_i2c = NULL;
+static int32_t axp2101_i2c_write(void *context,
+                                 const uint8_t *write_buffer,
+                                 size_t write_size) {
+  ii2c_device_handle_t device = (ii2c_device_handle_t)context;
+  if (!device) {
+    return II2C_ERR_INVALID_ARG;
+  }
 
-static int32_t axp2101_i2c_write(const uint8_t *write_buffer, size_t write_size) {
-  return ii2c_master_transmit(s_axp2101_i2c, write_buffer, write_size);
+  return ii2c_master_transmit(device, write_buffer, write_size);
 }
 
-static int32_t axp2101_i2c_write_read(const uint8_t *write_buffer,
+static int32_t axp2101_i2c_write_read(void *context,
+                                      const uint8_t *write_buffer,
                                       size_t write_size,
                                       uint8_t *read_buffer,
                                       size_t *read_size,
                                       size_t read_capacity) {
-  if (!read_buffer || !read_size) {
+  ii2c_device_handle_t device = (ii2c_device_handle_t)context;
+  if (!device || !read_buffer || !read_size) {
     return II2C_ERR_INVALID_ARG;
   }
 
   int32_t err = ii2c_master_transmit_receive(
-      s_axp2101_i2c, write_buffer, write_size, read_buffer, read_capacity);
+      device, write_buffer, write_size, read_buffer, read_capacity);
   if (err != II2C_ERR_NONE) {
     return err;
   }
@@ -101,13 +109,15 @@ int example_axp2101_read_voltages(uint16_t *vbus_mv,
   dev_cfg.scl_speed_hz = 100000;
   dev_cfg.timeout_ms = 3000;
 
-  err = ii2c_new_device(bus, &dev_cfg, &s_axp2101_i2c);
+  ii2c_device_handle_t axp2101_device = NULL;
+  err = ii2c_new_device(bus, &dev_cfg, &axp2101_device);
   if (err != II2C_ERR_NONE) {
     ii2c_del_master_bus(bus);
     return err;
   }
 
   axp2101_t pmic = {
+      .transport_context = axp2101_device,
       .transport_write = axp2101_i2c_write,
       .transport_write_read = axp2101_i2c_write_read,
   };
@@ -124,8 +134,7 @@ int example_axp2101_read_voltages(uint16_t *vbus_mv,
     err = axp2101_adc_vbat_read(&pmic, vbat_mv);
   }
 
-  ii2c_del_device(s_axp2101_i2c);
-  s_axp2101_i2c = NULL;
+  ii2c_del_device(axp2101_device);
   ii2c_del_master_bus(bus);
   return err;
 }

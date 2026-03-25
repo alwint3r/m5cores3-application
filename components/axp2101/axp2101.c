@@ -65,7 +65,7 @@ static int32_t axp2101_transport_write_exact(axp2101_t *pmic,
     return AXP2101_ERR_INVALID_ARG;
   }
 
-  return pmic->transport_write(write_buffer, write_size);
+  return pmic->transport_write(pmic->transport_context, write_buffer, write_size);
 }
 
 static int32_t axp2101_transport_read_exact(axp2101_t *pmic,
@@ -84,7 +84,7 @@ static int32_t axp2101_transport_read_exact(axp2101_t *pmic,
 
   size_t actual_read_size = read_size;
   int32_t err = pmic->transport_write_read(
-      write_buffer, write_size, read_buffer, &actual_read_size, read_size);
+      pmic->transport_context, write_buffer, write_size, read_buffer, &actual_read_size, read_size);
   if (err != AXP2101_ERR_NONE) {
     return err;
   }
