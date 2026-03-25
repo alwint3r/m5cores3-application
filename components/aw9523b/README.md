@@ -24,6 +24,7 @@ Consumers include the public headers as:
 
 The public API centers on `aw9523b_t`, a small callback holder:
 
+- `transport_context` is an opaque caller-owned pointer passed back to the transport callbacks.
 - `transport_write` sends raw bytes for direct register writes.
 - `transport_write_read` sends register-address bytes, reads back data bytes, and reports the actual read length.
 
@@ -54,21 +55,26 @@ The component itself does not depend on `ii2c`, but the application can still ad
 
 static ii2c_device_handle_t s_aw9523b_i2c = NULL;
 
-static int32_t aw9523b_i2c_write(const uint8_t *write_buffer, size_t write_size) {
-  return ii2c_master_transmit(s_aw9523b_i2c, write_buffer, write_size);
+static int32_t aw9523b_i2c_write(void *context,
+                                 const uint8_t *write_buffer,
+                                 size_t write_size) {
+  ii2c_device_handle_t dev = (ii2c_device_handle_t)context;
+  return ii2c_master_transmit(dev, write_buffer, write_size);
 }
 
-static int32_t aw9523b_i2c_write_read(const uint8_t *write_buffer,
+static int32_t aw9523b_i2c_write_read(void *context,
+                                      const uint8_t *write_buffer,
                                       size_t write_size,
                                       uint8_t *read_buffer,
                                       size_t *read_size,
                                       size_t read_capacity) {
+  ii2c_device_handle_t dev = (ii2c_device_handle_t)context;
   if (!read_buffer || !read_size) {
     return II2C_ERR_INVALID_ARG;
   }
 
   int32_t err = ii2c_master_transmit_receive(
-      s_aw9523b_i2c, write_buffer, write_size, read_buffer, read_capacity);
+      dev, write_buffer, write_size, read_buffer, read_capacity);
   if (err != II2C_ERR_NONE) {
     return err;
   }
@@ -103,6 +109,7 @@ int example_aw9523b_set_output(uint16_t aw9523b_address) {
   }
 
   aw9523b_t expander = {
+      .transport_context = s_aw9523b_i2c,
       .transport_write = aw9523b_i2c_write,
       .transport_write_read = aw9523b_i2c_write_read,
   };

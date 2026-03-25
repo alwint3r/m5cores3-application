@@ -1,4 +1,4 @@
-#include "power_mgmt.h"
+#include "cores3_power_mgmt.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,7 +15,7 @@ static const char *bool_to_yes_no(bool value) {
   return value ? "yes" : "no";
 }
 
-const char *power_mgmt_err_to_name(int32_t err) {
+const char *cores3_power_mgmt_err_to_name(int32_t err) {
   if (err >= AW9523B_ERR_BASE && err < (AW9523B_ERR_BASE + 0x100)) {
     return aw9523b_err_to_name(err);
   }
@@ -353,7 +353,7 @@ static int32_t print_axp2101_summary(axp2101_t *pmic) {
   return AXP2101_ERR_NONE;
 }
 
-int32_t power_mgmt_init(aw9523b_t *expander, axp2101_t *pmic) {
+int32_t cores3_power_mgmt_init(aw9523b_t *expander, axp2101_t *pmic) {
   if (expander == NULL || pmic == NULL) {
     return II2C_ERR_INVALID_ARG;
   }
@@ -362,19 +362,19 @@ int32_t power_mgmt_init(aw9523b_t *expander, axp2101_t *pmic) {
 
   int32_t err = configure_aw9523b_boost_enable(expander);
   if (err != AW9523B_ERR_NONE) {
-    printf("Failed to assert AW9523B BOOST_EN: %s\n", power_mgmt_err_to_name(err));
+    printf("Failed to assert AW9523B BOOST_EN: %s\n", cores3_power_mgmt_err_to_name(err));
     return err;
   }
 
   err = apply_cores3_axp2101_startup(pmic);
   if (err != AXP2101_ERR_NONE) {
-    printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n", power_mgmt_err_to_name(err));
+    printf("Failed to apply CoreS3 AXP2101 startup settings: %s\n", cores3_power_mgmt_err_to_name(err));
     return err;
   }
 
   err = print_axp2101_summary(pmic);
   if (err != AXP2101_ERR_NONE) {
-    printf("Failed to read post-startup AXP2101 summary: %s\n", power_mgmt_err_to_name(err));
+    printf("Failed to read post-startup AXP2101 summary: %s\n", cores3_power_mgmt_err_to_name(err));
     return err;
   }
 

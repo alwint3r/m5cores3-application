@@ -20,7 +20,7 @@ static int32_t aw9523b_transport_write_exact(aw9523b_t *expander,
     return AW9523B_ERR_INVALID_ARG;
   }
 
-  return expander->transport_write(write_buffer, write_size);
+  return expander->transport_write(expander->transport_context, write_buffer, write_size);
 }
 
 static int32_t aw9523b_transport_read_exact(aw9523b_t *expander,
@@ -38,8 +38,12 @@ static int32_t aw9523b_transport_read_exact(aw9523b_t *expander,
   }
 
   size_t actual_read_size = read_size;
-  int32_t err = expander->transport_write_read(
-      write_buffer, write_size, read_buffer, &actual_read_size, read_size);
+  int32_t err = expander->transport_write_read(expander->transport_context,
+                                               write_buffer,
+                                               write_size,
+                                               read_buffer,
+                                               &actual_read_size,
+                                               read_size);
   if (err != AW9523B_ERR_NONE) {
     return err;
   }

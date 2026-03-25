@@ -1,11 +1,13 @@
 idf_component_register(
 	SRCS
 		"main.c"
+		"cores3_io_extender.c"
 		"display/cores3_display.c"
 		"graphics/bmf_reader.c"
 		"graphics/display_surface.c"
 		"graphics/text_renderer.c"
-		"power_mgmt.c"
+		"cores3_power_mgmt.c"
+		"cores3_touch.c"
   INCLUDE_DIRS "."
 	REQUIRES
 	ii2c

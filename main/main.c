@@ -5,22 +5,22 @@
 #include <aw9523b/aw9523b.h>
 #include <axp2101/axp2101.h>
 #include <ft6x36/ft6x36.h>
-#include <igpio/igpio.h>
 #include <ii2c/ii2c.h>
-#include <driver/gpio.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <esp_system.h>
 
+#include "cores3_io_extender.h"
+#include "cores3_power_mgmt.h"
+#include "cores3_touch.h"
 #include "display/cores3_display.h"
 #include "graphics/bmf_reader.h"
 #include "graphics/display_surface.h"
 #include "graphics/fonts/open_sans_regular_16_4bpp.h"
 #include "graphics/fonts/open_sans_regular_32_4bpp.h"
 #include "graphics/text_renderer.h"
-#include "power_mgmt.h"
 
 static const int32_t SYS_I2C_SDA = 12;
 static const int32_t SYS_I2C_SCL = 11;
@@ -29,66 +29,39 @@ static const uint16_t CORES3_AW9523B_I2C_ADDRESS = 0x58;
 static const uint16_t CORES3_AXP2101_I2C_ADDRESS = 0x34;
 static const uint16_t CORES3_FT6336_I2C_ADDRESS = 0x38;
 
-static const uint8_t CORES3_AW9523B_TOUCH_INT_PORT = 1;
-static const uint8_t CORES3_AW9523B_TOUCH_INT_PIN = 2;
-static const uint8_t CORES3_AW9523B_TOUCH_RST_PORT = 0;
-static const uint8_t CORES3_AW9523B_TOUCH_RST_PIN = 0;
-static const int CORES3_I2C_INT_PIN = 21;
-
 static ii2c_master_bus_handle_t sys_i2c = NULL;
 static ii2c_device_handle_t aw9523b_i2c = NULL;
 static ii2c_device_handle_t axp2101_i2c = NULL;
 static ii2c_device_handle_t ft6336_i2c = NULL;
 static aw9523b_t aw9523b_expander = {0};
 static axp2101_t axp2101_pmic = {0};
-static ft6x36_t ft6336;
+static ft6x36_t ft6336 = {0};
 static cores3_display_t board_display = {0};
 static display_surface_t app_surface = {0};
 static TaskHandle_t main_task_handle = NULL;
 
-static const char *touch_err_to_name(int32_t err) {
-  if (err >= FT6X36_ERR_BASE && err < (FT6X36_ERR_BASE + 0x100)) {
-    return ft6x36_err_to_name(err);
-  }
-  if (err >= AW9523B_ERR_BASE && err < (AW9523B_ERR_BASE + 0x100)) {
-    return aw9523b_err_to_name(err);
-  }
-
-  return ii2c_err_to_name(err);
-}
-
-static const char *aw9523b_err_or_transport_to_name(int32_t err) {
-  if (err >= AW9523B_ERR_BASE && err < (AW9523B_ERR_BASE + 0x100)) {
-    return aw9523b_err_to_name(err);
-  }
-
-  return ii2c_err_to_name(err);
-}
-
 static void release_handles(void) {
   display_surface_deinit(&app_surface);
   cores3_display_deinit(&board_display);
-
-  if (aw9523b_i2c != NULL) {
-    (void)ii2c_del_device(aw9523b_i2c);
-    aw9523b_i2c = NULL;
-  }
-  aw9523b_expander.transport_write = NULL;
-  aw9523b_expander.transport_write_read = NULL;
-
-  if (axp2101_i2c != NULL) {
-    (void)ii2c_del_device(axp2101_i2c);
-    axp2101_i2c = NULL;
-  }
-  axp2101_pmic.transport_write = NULL;
-  axp2101_pmic.transport_write_read = NULL;
+  cores3_touch_deinit(&ft6336);
+  cores3_io_extender_deinit(&aw9523b_expander);
 
   if (ft6336_i2c != NULL) {
     (void)ii2c_del_device(ft6336_i2c);
     ft6336_i2c = NULL;
   }
-  ft6336.transport_write = NULL;
-  ft6336.transport_write_read = NULL;
+
+  if (axp2101_i2c != NULL) {
+    (void)ii2c_del_device(axp2101_i2c);
+    axp2101_i2c = NULL;
+  }
+
+  if (aw9523b_i2c != NULL) {
+    (void)ii2c_del_device(aw9523b_i2c);
+    aw9523b_i2c = NULL;
+  }
+  axp2101_pmic.transport_write = NULL;
+  axp2101_pmic.transport_write_read = NULL;
 
   if (sys_i2c != NULL) {
     (void)ii2c_del_master_bus(sys_i2c);
@@ -125,29 +98,6 @@ static int32_t attach_i2c_device(uint16_t address, ii2c_device_handle_t *out_dev
   return ii2c_new_device(sys_i2c, &dev_cfg, out_device);
 }
 
-static int32_t aw9523b_i2c_write(const uint8_t *write_buffer, size_t write_size) {
-  return ii2c_master_transmit(aw9523b_i2c, write_buffer, write_size);
-}
-
-static int32_t aw9523b_i2c_write_read(const uint8_t *write_buffer,
-                                      size_t write_size,
-                                      uint8_t *read_buffer,
-                                      size_t *read_size,
-                                      size_t read_capacity) {
-  if (!read_buffer || !read_size) {
-    return II2C_ERR_INVALID_ARG;
-  }
-
-  int32_t err = ii2c_master_transmit_receive(
-      aw9523b_i2c, write_buffer, write_size, read_buffer, read_capacity);
-  if (err != II2C_ERR_NONE) {
-    return err;
-  }
-
-  *read_size = read_capacity;
-  return II2C_ERR_NONE;
-}
-
 static int32_t axp2101_i2c_write(const uint8_t *write_buffer, size_t write_size) {
   return ii2c_master_transmit(axp2101_i2c, write_buffer, write_size);
 }
@@ -169,129 +119,6 @@ static int32_t axp2101_i2c_write_read(const uint8_t *write_buffer,
 
   *read_size = read_capacity;
   return II2C_ERR_NONE;
-}
-
-static int32_t ft6336_i2c_write(const uint8_t *write_buffer, size_t write_size) {
-  return ii2c_master_transmit(ft6336_i2c, write_buffer, write_size);
-}
-
-static int32_t ft6336_i2c_write_read(const uint8_t *write_buffer,
-                                     size_t write_size,
-                                     uint8_t *read_buffer,
-                                     size_t *read_size,
-                                     size_t read_capacity) {
-  if (!read_buffer || !read_size) {
-    return II2C_ERR_INVALID_ARG;
-  }
-
-  int32_t err = ii2c_master_transmit_receive(
-      ft6336_i2c, write_buffer, write_size, read_buffer, read_capacity);
-  if (err != II2C_ERR_NONE) {
-    return err;
-  }
-
-  *read_size = read_capacity;
-  return II2C_ERR_NONE;
-}
-
-static void IRAM_ATTR host_gpio_intr_handler(void *arg) {
-  if ((int32_t)arg == CORES3_I2C_INT_PIN) {
-    BaseType_t higher_priority_task_woken = pdFALSE;
-    vTaskNotifyGiveFromISR(main_task_handle, &higher_priority_task_woken);
-    if (higher_priority_task_woken == pdTRUE) {
-      portYIELD_FROM_ISR();
-    }
-  }
-}
-
-static int32_t configure_touch_screen(void) {
-  int32_t err = aw9523b_port_dir_set(&aw9523b_expander,
-                                     CORES3_AW9523B_TOUCH_INT_PORT,
-                                     CORES3_AW9523B_TOUCH_INT_PIN,
-                                     AW9523B_PORT_DIRECTION_INPUT);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-
-  err = aw9523b_port_dir_set(&aw9523b_expander,
-                             CORES3_AW9523B_TOUCH_RST_PORT,
-                             CORES3_AW9523B_TOUCH_RST_PIN,
-                             AW9523B_PORT_DIRECTION_OUTPUT);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-
-  err = aw9523b_level_set(
-      &aw9523b_expander, CORES3_AW9523B_TOUCH_RST_PORT, CORES3_AW9523B_TOUCH_RST_PIN, 1);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-
-  uint8_t pin_level;
-  err = aw9523b_level_get(
-      &aw9523b_expander, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, &pin_level);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-  (void)pin_level;
-
-  err = aw9523b_interrupt_set(
-      &aw9523b_expander, CORES3_AW9523B_TOUCH_INT_PORT, CORES3_AW9523B_TOUCH_INT_PIN, true);
-  if (err != AW9523B_ERR_NONE) {
-    return err;
-  }
-
-  if (ft6336_i2c == NULL) {
-    err = attach_i2c_device(CORES3_FT6336_I2C_ADDRESS, &ft6336_i2c);
-    if (err != II2C_ERR_NONE) {
-      return err;
-    }
-  }
-
-  ft6336.transport_write = ft6336_i2c_write;
-  ft6336.transport_write_read = ft6336_i2c_write_read;
-
-  uint8_t touch_fwver = 0;
-  err = ft6x36_firmware_version_get(&ft6336, &touch_fwver);
-  if (err != FT6X36_ERR_NONE) {
-    return err;
-  }
-
-  printf("FT6x36 firmware version: %u\n", touch_fwver);
-
-  err = ft6x36_interrupt_mode_set(&ft6336, FT6X36_INTERRUPT_MODE_TRIGGER);
-  if (err != FT6X36_ERR_NONE) {
-    return err;
-  }
-
-  return FT6X36_ERR_NONE;
-}
-
-static int32_t configure_io_extender_interrupt(void) {
-  igpio_config_t config;
-  igpio_get_default_config(&config);
-  config.intr_type = IGPIO_INTR_ANYEDGE;
-  config.io_num = CORES3_I2C_INT_PIN;
-  config.mode = IGPIO_MODE_INPUT;
-  config.pull_mode = IGPIO_PULL_UP;
-
-  int32_t err = igpio_configure(&config);
-  if (err != IGPIO_ERR_NONE) {
-    return err;
-  }
-
-  err = gpio_install_isr_service(0);
-  if (err != ESP_OK) {
-    return err;
-  }
-
-  err = gpio_isr_handler_add(
-      (gpio_num_t)CORES3_I2C_INT_PIN, host_gpio_intr_handler, (void *)CORES3_I2C_INT_PIN);
-  if (err != ESP_OK) {
-    return err;
-  }
-
-  return IGPIO_ERR_NONE;
 }
 
 static int32_t draw_rounded_button(display_surface_t *surface,
@@ -350,6 +177,13 @@ void app_main(void) {
     return;
   }
 
+  err = cores3_io_extender_init(aw9523b_i2c, &aw9523b_expander);
+  if (err != 0) {
+    printf("Failed to initialize AW9523B: %s\n", cores3_io_extender_err_to_name(err));
+    release_handles();
+    return;
+  }
+
   err = attach_i2c_device(CORES3_AXP2101_I2C_ADDRESS, &axp2101_i2c);
   if (err != II2C_ERR_NONE) {
     printf("Failed to attach AXP2101: %s\n", ii2c_err_to_name(err));
@@ -357,27 +191,36 @@ void app_main(void) {
     return;
   }
 
-  aw9523b_expander.transport_write = aw9523b_i2c_write;
-  aw9523b_expander.transport_write_read = aw9523b_i2c_write_read;
   axp2101_pmic.transport_write = axp2101_i2c_write;
   axp2101_pmic.transport_write_read = axp2101_i2c_write_read;
 
-  err = power_mgmt_init(&aw9523b_expander, &axp2101_pmic);
+  err = cores3_power_mgmt_init(&aw9523b_expander, &axp2101_pmic);
   if (err != 0) {
     release_handles();
     return;
   }
 
-  err = configure_io_extender_interrupt();
-  if (err != IGPIO_ERR_NONE) {
-    printf("Failed to setup I/O extender interrupt: %ld\n", (long)err);
+  err = cores3_io_extender_host_interrupt_init(main_task_handle);
+  if (err != 0) {
+    printf("Failed to setup I/O extender interrupt: %s (%ld)\n",
+           cores3_io_extender_err_to_name(err),
+           (long)err);
     release_handles();
     return;
   }
 
-  err = configure_touch_screen();
+  err = attach_i2c_device(CORES3_FT6336_I2C_ADDRESS, &ft6336_i2c);
+  if (err != II2C_ERR_NONE) {
+    printf("Failed to attach FT6336: %s\n", ii2c_err_to_name(err));
+    release_handles();
+    return;
+  }
+
+  err = cores3_touch_init(ft6336_i2c, &aw9523b_expander, &ft6336);
   if (err != FT6X36_ERR_NONE) {
-    printf("Failed to configure the touch screen: %s (%ld)\n", touch_err_to_name(err), (long)err);
+    printf("Failed to configure the touch screen: %s (%ld)\n",
+           cores3_touch_err_to_name(err),
+           (long)err);
     release_handles();
     return;
   }
@@ -563,33 +406,31 @@ void app_main(void) {
                                             .y1 = (int16_t)buttons_height,
                                         },
                                         0xFF08);
-  printf("graphics_fill_round_rect_r6_top -> %ld\n", (long)err);
 
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     uint8_t input_value = 0;
 
-    err = aw9523b_port_input_read(&aw9523b_expander, CORES3_AW9523B_TOUCH_INT_PORT, &input_value);
+    // clear touch interrupt from the I/O extender
+    err = aw9523b_port_input_read(&aw9523b_expander, 1, &input_value);
     if (err != AW9523B_ERR_NONE) {
-      printf("Failed to read AW9523B register for PORT1 input data: %s\n",
-             aw9523b_err_or_transport_to_name(err));
+      ESP_LOGE("MAIN",
+               "Failed to read AW9523B register for PORT1 input data: %s\n",
+               cores3_io_extender_err_to_name(err));
       continue;
     }
 
     (void)input_value;
-    ESP_LOGI("TOUCH", "Touch INT is propagated!");
     ft6x36_touch_data_t out_touch;
     err = ft6x36_touch_data_get(&ft6336, &out_touch);
     if (err != FT6X36_ERR_NONE) {
-      printf("Failed to read the touch data: %s (%ld)", ft6x36_err_to_name(err), (long)err);
+      ESP_LOGE(
+          "MAIN", "Failed to read the touch data: %s (%ld)", ft6x36_err_to_name(err), (long)err);
       continue;
     }
 
-    ESP_LOGI("TOUCH", "Touch count = %u", out_touch.touch_count);
-    ESP_LOGI("TOUCH", "Gesture ID: %u", out_touch.gesture_id);
-
     for (uint8_t count = 0; count < out_touch.touch_count; count++) {
-      ESP_LOGI("TOUCH",
+      ESP_LOGI("MAIN",
                "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u",
                count,
                out_touch.points[count].x,
@@ -604,11 +445,11 @@ void app_main(void) {
       switch (out_touch.points[count].event) {
         case FT6X36_TOUCH_EVENT_PRESS_DOWN:
           if (graphics_rect_contains_point(&button, touch_x, touch_y)) {
-            ESP_LOGI("TOUCH", "Button is touched!");
+            ESP_LOGI("MAIN", "Button is touched!");
           }
 
           if (graphics_rect_contains_point(&another, touch_x, touch_y)) {
-            ESP_LOGI("TOUCH", "Another button is touched!");
+            ESP_LOGI("MAIN", "Another button is touched!");
           }
 
         default:

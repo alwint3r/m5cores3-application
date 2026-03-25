@@ -88,7 +88,8 @@ int32_t ft6x36_reg_read(ft6x36_t *touch, uint8_t reg, uint8_t *out_data, size_t 
   }
 
   size_t read_size = len;
-  int32_t err = touch->transport_write_read(&reg, 1, out_data, &read_size, len);
+  int32_t err =
+      touch->transport_write_read(touch->transport_context, &reg, 1, out_data, &read_size, len);
   if (err != FT6X36_ERR_NONE) {
     return err;
   }
@@ -109,7 +110,7 @@ int32_t ft6x36_reg8_write(ft6x36_t *touch, uint8_t reg, uint8_t value) {
     return touch == NULL ? FT6X36_ERR_INVALID_ARG : FT6X36_ERR_INVALID_STATE;
   }
 
-  return touch->transport_write((uint8_t[2]){reg, value}, 2);
+  return touch->transport_write(touch->transport_context, (uint8_t[2]){reg, value}, 2);
 }
 
 int32_t ft6x36_reg8_set_bits(ft6x36_t *touch, uint8_t reg, uint8_t bits) {

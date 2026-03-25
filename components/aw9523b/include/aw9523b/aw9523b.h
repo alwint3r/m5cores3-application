@@ -8,8 +8,8 @@
  * @brief Public AW9523B GPIO-expander helpers built on abstract transport callbacks.
  *
  * This component owns AW9523B register communication and register decoding
- * only. Applications provide callbacks that write register bytes and perform a
- * combined write-then-read transaction.
+ * only. Applications provide callbacks plus an opaque transport context that
+ * write register bytes and perform a combined write-then-read transaction.
  *
  * The public API uses `port` values `0` and `1` for the two 8-bit GPIO banks,
  * and `pin` values `0` through `7` for one bit inside a port.
@@ -44,7 +44,9 @@ extern "C" {
  * The callback is used for direct register writes. The return value is passed
  * through unchanged.
  */
-typedef int32_t (*aw9523b_transport_write)(const uint8_t *write_buffer, size_t write_size);
+typedef int32_t (*aw9523b_transport_write)(void *context,
+                                           const uint8_t *write_buffer,
+                                           size_t write_size);
 
 /**
  * @brief Callback that performs a combined write-then-read transaction.
@@ -53,7 +55,8 @@ typedef int32_t (*aw9523b_transport_write)(const uint8_t *write_buffer, size_t w
  * bytes into `read_buffer`, and finally store the actual byte count in
  * `*read_size`.
  */
-typedef int32_t (*aw9523b_transport_write_read)(const uint8_t *write_buffer,
+typedef int32_t (*aw9523b_transport_write_read)(void *context,
+                                                const uint8_t *write_buffer,
                                                 size_t write_size,
                                                 uint8_t *read_buffer,
                                                 size_t *read_size,
@@ -62,6 +65,7 @@ typedef int32_t (*aw9523b_transport_write_read)(const uint8_t *write_buffer,
 typedef struct aw9523b aw9523b_t;
 /** @brief Transport callback set used by the AW9523B helper functions. */
 struct aw9523b {
+  void *transport_context;
   aw9523b_transport_write transport_write;
   aw9523b_transport_write_read transport_write_read;
 };

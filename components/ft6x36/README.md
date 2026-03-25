@@ -23,7 +23,7 @@ Consumers include the public headers as:
 
 ## API Overview
 
-The public API centers on `ft6x36_t`, which is a small callback set for register writes and combined register write-then-read transactions. The component does not allocate buses, own GPIOs, or wrap an `ii2c_device_handle_t` in a second handle type.
+The public API centers on `ft6x36_t`, which is a small callback set plus a caller-owned `transport_context` pointer for register writes and combined register write-then-read transactions. The component does not allocate buses, own GPIOs, or wrap an `ii2c_device_handle_t` in a second handle type.
 
 Main entry points:
 
@@ -54,21 +54,26 @@ Relevant public types and constants include:
 
 static ii2c_device_handle_t s_ft6x36_dev = NULL;
 
-static int32_t ft6x36_i2c_write(const uint8_t *write_buffer, size_t write_size) {
-  return ii2c_master_transmit(s_ft6x36_dev, write_buffer, write_size);
+static int32_t ft6x36_i2c_write(void *context,
+                                const uint8_t *write_buffer,
+                                size_t write_size) {
+  ii2c_device_handle_t dev = (ii2c_device_handle_t)context;
+  return ii2c_master_transmit(dev, write_buffer, write_size);
 }
 
-static int32_t ft6x36_i2c_write_read(const uint8_t *write_buffer,
+static int32_t ft6x36_i2c_write_read(void *context,
+                                     const uint8_t *write_buffer,
                                      size_t write_size,
                                      uint8_t *read_buffer,
                                      size_t *read_size,
                                      size_t read_capacity) {
+  ii2c_device_handle_t dev = (ii2c_device_handle_t)context;
   if (!read_buffer || !read_size) {
     return II2C_ERR_INVALID_ARG;
   }
 
   int32_t err = ii2c_master_transmit_receive(
-      s_ft6x36_dev, write_buffer, write_size, read_buffer, read_capacity);
+      dev, write_buffer, write_size, read_buffer, read_capacity);
   if (err != II2C_ERR_NONE) {
     return err;
   }
@@ -107,6 +112,7 @@ int example_ft6x36_read_touch(uint16_t ft6x36_address, ft6x36_touch_data_t *out_
   }
 
   ft6x36_t touch = {
+      .transport_context = s_ft6x36_dev,
       .transport_write = ft6x36_i2c_write,
       .transport_write_read = ft6x36_i2c_write_read,
   };

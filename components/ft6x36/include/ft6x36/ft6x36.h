@@ -8,9 +8,10 @@
  * @brief Public FT6X36 touch-controller helpers built on abstract transport callbacks.
  *
  * This component owns FT6X36 register communication and register decoding
- * only. Applications provide callbacks that write register bytes and perform a
- * combined write-then-read transaction. Board-level reset, wake, and interrupt
- * GPIO control remain application-owned.
+ * only. Applications provide callbacks plus an opaque transport context that
+ * write register bytes and perform a combined write-then-read transaction.
+ * Board-level reset, wake, and interrupt GPIO control remain
+ * application-owned.
  * @{
  */
 #pragma once
@@ -49,7 +50,9 @@ extern "C" {
  * The callback is used for direct register writes. The return value is passed
  * through unchanged.
  */
-typedef int32_t (*ft6x36_transport_write)(const uint8_t *write_buffer, size_t write_size);
+typedef int32_t (*ft6x36_transport_write)(void *context,
+                                          const uint8_t *write_buffer,
+                                          size_t write_size);
 
 /**
  * @brief Callback that performs a combined write-then-read transaction.
@@ -58,7 +61,8 @@ typedef int32_t (*ft6x36_transport_write)(const uint8_t *write_buffer, size_t wr
  * bytes into `read_buffer`, and finally store the actual byte count in
  * `*read_size`.
  */
-typedef int32_t (*ft6x36_transport_write_read)(const uint8_t *write_buffer,
+typedef int32_t (*ft6x36_transport_write_read)(void *context,
+                                               const uint8_t *write_buffer,
                                                size_t write_size,
                                                uint8_t *read_buffer,
                                                size_t *read_size,
@@ -67,6 +71,8 @@ typedef int32_t (*ft6x36_transport_write_read)(const uint8_t *write_buffer,
 typedef struct ft6x36 ft6x36_t;
 /** @brief Transport callback set used by the FT6X36 helper functions. */
 struct ft6x36 {
+  /** @brief Opaque caller-owned transport context passed back to callbacks. */
+  void *transport_context;
   /** @brief Raw write callback used by register writes. */
   ft6x36_transport_write transport_write;
   /** @brief Required combined write-then-read callback for register reads. */
