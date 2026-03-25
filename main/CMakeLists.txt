@@ -1,6 +1,7 @@
 idf_component_register(
 	SRCS
 		"main.c"
+		"cores3/app.c"
 		"cores3/cores3_io_extender.c"
 		"cores3/display/cores3_display.c"
 		"cores3/graphics/bmf_reader.c"
