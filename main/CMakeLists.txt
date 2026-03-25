@@ -1,17 +1,19 @@
 idf_component_register(
 	SRCS
 		"main.c"
-		"cores3_io_extender.c"
-		"display/cores3_display.c"
-		"graphics/bmf_reader.c"
-		"graphics/bitmap_icon.c"
-		"graphics/display_surface.c"
-		"graphics/render_support.c"
-		"graphics/text_renderer.c"
-		"cores3_power_mgmt.c"
-		"cores3_touch.c"
-		"cores3_board.c"
-  INCLUDE_DIRS "."
+		"cores3/cores3_io_extender.c"
+		"cores3/display/cores3_display.c"
+		"cores3/graphics/bmf_reader.c"
+		"cores3/graphics/bitmap_icon.c"
+		"cores3/graphics/display_surface.c"
+		"cores3/graphics/render_support.c"
+		"cores3/graphics/text_renderer.c"
+		"cores3/cores3_power_mgmt.c"
+		"cores3/cores3_touch.c"
+		"cores3/cores3_board.c"
+	INCLUDE_DIRS
+		"."
+		"cores3"
 	REQUIRES
 	ii2c
 	axp2101

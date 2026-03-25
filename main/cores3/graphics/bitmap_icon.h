@@ -18,11 +18,6 @@ typedef struct {
   graphics_bitmap_mask_format_t format;
 } graphics_bitmap_icon_t;
 
-int32_t graphics_bitmap_icon_center_position(const graphics_bitmap_icon_t *icon,
-                                             const graphics_rect_t *bounding,
-                                             int16_t *x,
-                                             int16_t *y);
-
 int32_t graphics_draw_bitmap_icon(display_surface_t *surface,
                                   const graphics_bitmap_icon_t *icon,
                                   int16_t x,

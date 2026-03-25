@@ -3,16 +3,22 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "cores3_board_constants.h"
-
 #include <aw9523b/aw9523b.h>
 #include <igpio/igpio.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+static const int32_t LCD_SPI_MOSI = 37;
+static const int32_t LCD_SPI_SCK = 36;
+static const int32_t LCD_SPI_CS = 3;
+static const int32_t LCD_SPI_DC = 35;
+
 static const uint16_t LCD_WIDTH = 320;
 static const uint16_t LCD_HEIGHT = 240;
+enum {
+  LCD_SPI_MAX_TRANSFER_BYTES = 320 * 2,
+};
 
 static const uint8_t CORES3_AW9523B_LCD_RST_PORT = 1;
 static const uint8_t CORES3_AW9523B_LCD_RST_PIN = 1;
@@ -25,7 +31,7 @@ static int32_t configure_lcd_dc_gpio(cores3_display_t *display) {
   igpio_config_t config;
   igpio_get_default_config(&config);
 
-  config.io_num = CORES3_BOARD_LCD_SPI_DC;
+  config.io_num = LCD_SPI_DC;
   config.mode = IGPIO_MODE_OUTPUT;
   config.pull_mode = IGPIO_PULL_FLOATING;
   config.intr_type = IGPIO_INTR_DISABLED;
@@ -37,13 +43,13 @@ static int32_t configure_lcd_dc_gpio(cores3_display_t *display) {
 
   display->dc_gpio_configured = true;
 
-  err = igpio_set_level(CORES3_BOARD_LCD_SPI_DC, false);
+  err = igpio_set_level(LCD_SPI_DC, false);
   if (err != IGPIO_ERR_NONE) {
     return err;
   }
 
   bool level = true;
-  err = igpio_get_level(CORES3_BOARD_LCD_SPI_DC, &level);
+  err = igpio_get_level(LCD_SPI_DC, &level);
   if (err != IGPIO_ERR_NONE) {
     return err;
   }
@@ -64,7 +70,7 @@ static int32_t display_write_bytes(cores3_display_t *display,
     return ISPI_ERR_INVALID_ARG;
   }
 
-  int32_t err = igpio_set_level(CORES3_BOARD_LCD_SPI_DC, is_data);
+  int32_t err = igpio_set_level(LCD_SPI_DC, is_data);
   if (err != IGPIO_ERR_NONE) {
     return err;
   }
@@ -119,10 +125,18 @@ void cores3_display_deinit(cores3_display_t *display) {
     return;
   }
 
-  display->spi_device = NULL;
+  if (display->spi_device != NULL) {
+    (void)ispi_del_device(display->spi_device);
+    display->spi_device = NULL;
+  }
+
+  if (display->spi_bus != NULL) {
+    (void)ispi_del_master_bus(display->spi_bus);
+    display->spi_bus = NULL;
+  }
 
   if (display->dc_gpio_configured) {
-    (void)igpio_reset_pin(CORES3_BOARD_LCD_SPI_DC);
+    (void)igpio_reset_pin(LCD_SPI_DC);
     display->dc_gpio_configured = false;
   }
 
@@ -130,15 +144,12 @@ void cores3_display_deinit(cores3_display_t *display) {
   display->io_expander = NULL;
 }
 
-int32_t cores3_display_init(cores3_display_t *display,
-                            ispi_device_handle_t spi_device,
-                            aw9523b_t *io_expander) {
-  if (display == NULL || spi_device == NULL || io_expander == NULL) {
+int32_t cores3_display_init(cores3_display_t *display, aw9523b_t *io_expander) {
+  if (display == NULL || io_expander == NULL) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
   memset(display, 0, sizeof(*display));
-  display->spi_device = spi_device;
   display->io_expander = io_expander;
 
   int32_t err = aw9523b_port_dir_set(io_expander,
@@ -158,6 +169,32 @@ int32_t cores3_display_init(cores3_display_t *display,
 
   err = configure_lcd_dc_gpio(display);
   if (err != IGPIO_ERR_NONE) {
+    cores3_display_deinit(display);
+    return err;
+  }
+
+  ispi_master_bus_config_t spi_bus_cfg = {0};
+  ispi_get_default_master_bus_config(&spi_bus_cfg);
+  spi_bus_cfg.host = ISPI_HOST_SPI2;
+  spi_bus_cfg.mosi_io_num = LCD_SPI_MOSI;
+  spi_bus_cfg.miso_io_num = -1;
+  spi_bus_cfg.sclk_io_num = LCD_SPI_SCK;
+  spi_bus_cfg.max_transfer_sz = LCD_SPI_MAX_TRANSFER_BYTES;
+
+  err = ispi_new_master_bus(&spi_bus_cfg, &display->spi_bus);
+  if (err != ISPI_ERR_NONE) {
+    cores3_display_deinit(display);
+    return err;
+  }
+
+  ispi_device_config_t lcd_dev_cfg = {0};
+  ispi_get_default_device_config(&lcd_dev_cfg);
+  lcd_dev_cfg.cs_io_num = LCD_SPI_CS;
+  lcd_dev_cfg.clock_speed_hz = 40000000;
+  lcd_dev_cfg.mode = 0;
+
+  err = ispi_new_device(display->spi_bus, &lcd_dev_cfg, &display->spi_device);
+  if (err != ISPI_ERR_NONE) {
     cores3_display_deinit(display);
     return err;
   }
@@ -207,5 +244,5 @@ uint16_t cores3_display_height(void) {
 }
 
 size_t cores3_display_max_transfer_bytes(void) {
-  return CORES3_BOARD_LCD_SPI_MAX_TRANSFER_BYTES;
+  return LCD_SPI_MAX_TRANSFER_BYTES;
 }

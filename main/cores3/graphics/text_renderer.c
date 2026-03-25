@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "graphics/render_support.h"
-
 typedef struct {
   const uint8_t *bitmap;
   int draw_x;
@@ -15,6 +13,64 @@ typedef struct {
   int height;
   int stride;
 } prepared_glyph_t;
+
+static inline void graphics_color_to_u8_array(uint8_t *dst, uint16_t color) {
+  dst[0] = (uint8_t)(color >> 8);
+  dst[1] = (uint8_t)(color & 0xFF);
+}
+
+static void graphics_fill_color_span(uint8_t *buffer, size_t pixel_count, uint16_t color) {
+  for (size_t i = 0; i < pixel_count; i++) {
+    graphics_color_to_u8_array(buffer + (i * 2U), color);
+  }
+}
+
+static int32_t graphics_write_buffer_chunked(display_surface_t *surface,
+                                             const uint8_t *buffer,
+                                             size_t len) {
+  if (surface == NULL || surface->panel == NULL || buffer == NULL || len == 0U) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  size_t chunk_bytes = surface->max_transfer_bytes;
+  if (chunk_bytes == 0U) {
+    chunk_bytes = len;
+  }
+
+  size_t offset = 0U;
+  while (offset < len) {
+    size_t bytes_this_round = len - offset;
+    if (bytes_this_round > chunk_bytes) {
+      bytes_this_round = chunk_bytes;
+    }
+
+    int32_t err = ili9342_write_data(surface->panel, buffer + offset, bytes_this_round);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+
+    offset += bytes_this_round;
+  }
+
+  return ILI9342_ERR_NONE;
+}
+
+static uint16_t blend_rgb565(uint16_t bg, uint16_t fg, uint8_t coverage) {
+  uint32_t bg_r = (bg >> 11) & 0x1F;
+  uint32_t bg_g = (bg >> 5) & 0x3F;
+  uint32_t bg_b = bg & 0x1F;
+
+  uint32_t fg_r = (fg >> 11) & 0x1F;
+  uint32_t fg_g = (fg >> 5) & 0x3F;
+  uint32_t fg_b = fg & 0x1F;
+
+  uint32_t inv = 255U - coverage;
+  uint32_t out_r = (fg_r * coverage + bg_r * inv + 127U) / 255U;
+  uint32_t out_g = (fg_g * coverage + bg_g * inv + 127U) / 255U;
+  uint32_t out_b = (fg_b * coverage + bg_b * inv + 127U) / 255U;
+
+  return (uint16_t)((out_r << 11) | (out_g << 5) | out_b);
+}
 
 static int32_t graphics_glyph_stride_get(const bmf_font_view_t *font_view, int width, int *stride) {
   if (font_view == NULL || stride == NULL || width <= 0) {
@@ -82,25 +138,28 @@ static int32_t prepared_glyph_coverage_get(const bmf_font_view_t *font_view,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  graphics_bitmap_mask_format_t format = 0;
   if (font_view->bpp == BMF_BPP_MONO) {
-    format = GRAPHICS_BITMAP_MASK_1BPP;
-  } else if (font_view->bpp == BMF_BPP_GRAY4) {
-    format = GRAPHICS_BITMAP_MASK_4BPP;
-  } else if (font_view->bpp == BMF_BPP_GRAY8) {
-    format = GRAPHICS_BITMAP_MASK_8BPP;
-  } else {
-    return ILI9342_ERR_INVALID_ARG;
+    int byte_idx = src_y * prepared->stride + src_x / 8;
+    int bit_idx = 7 - (src_x % 8);
+    uint8_t byte = prepared->bitmap[byte_idx];
+    *coverage = ((byte >> bit_idx) & 1U) != 0U ? 255U : 0U;
+    return ILI9342_ERR_NONE;
   }
 
-  return graphics_mask_coverage_get(format,
-                                    prepared->bitmap,
-                                    (uint16_t)prepared->stride,
-                                    (uint16_t)prepared->width,
-                                    (uint16_t)prepared->height,
-                                    src_x,
-                                    src_y,
-                                    coverage);
+  if (font_view->bpp == BMF_BPP_GRAY4) {
+    int byte_idx = src_y * prepared->stride + src_x / 2;
+    uint8_t byte = prepared->bitmap[byte_idx];
+    uint8_t gray4 = (src_x % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
+    *coverage = (uint8_t)((gray4 << 4) | gray4);
+    return ILI9342_ERR_NONE;
+  }
+
+  if (font_view->bpp == BMF_BPP_GRAY8) {
+    *coverage = prepared->bitmap[src_y * prepared->stride + src_x];
+    return ILI9342_ERR_NONE;
+  }
+
+  return ILI9342_ERR_INVALID_ARG;
 }
 
 static uint16_t color_from_coverage(uint16_t background_color,
@@ -114,7 +173,7 @@ static uint16_t color_from_coverage(uint16_t background_color,
     return foreground_color;
   }
 
-  return graphics_blend_rgb565(background_color, foreground_color, coverage);
+  return blend_rgb565(background_color, foreground_color, coverage);
 }
 
 static int32_t render_prepared_glyph_row(uint8_t *row_buffer,
@@ -148,8 +207,8 @@ static int32_t render_prepared_glyph_row(uint8_t *row_buffer,
     }
 
     size_t row_offset = (size_t)(dst_x - row_origin_x) * 2U;
-    graphics_store_rgb565(row_buffer + row_offset,
-                          color_from_coverage(background_color, foreground_color, coverage));
+    graphics_color_to_u8_array(row_buffer + row_offset,
+                               color_from_coverage(background_color, foreground_color, coverage));
   }
 
   return ILI9342_ERR_NONE;
@@ -250,55 +309,19 @@ static int32_t flush_prepared_glyph_run(display_surface_t *surface,
                                 foreground_color);
 }
 
-static int16_t graphics_text_line_height_get(const bmf_font_view_t *font) {
-  if (font->line_height > 0U) {
-    return (int16_t)font->line_height;
-  }
-
-  if (font->ascent > 0) {
-    return font->ascent;
-  }
-
-  return 1;
-}
-
-static int16_t graphics_text_baseline_for_line_top(const bmf_font_view_t *font, int32_t line_y0) {
-  if (font->ascent > 0) {
-    return (int16_t)(line_y0 + font->ascent);
-  }
-
-  return (int16_t)(line_y0 + graphics_text_line_height_get(font) - 1);
-}
-
 int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font, const graphics_rect_t *bounding) {
-  int16_t first_line_y = graphics_text_baseline_for_line_top(font, bounding->y0);
+  int16_t first_line_y = bounding->y0;
+  if (font->ascent > 0) {
+    first_line_y = (int16_t)(bounding->y0 + font->ascent);
+  } else if (font->line_height > 0U) {
+    first_line_y = (int16_t)(bounding->y0 + (int16_t)font->line_height - 1);
+  }
 
   if (first_line_y > bounding->y1) {
     first_line_y = bounding->y1;
   }
 
   return first_line_y;
-}
-
-int16_t graphics_text_center_baseline_y(const bmf_font_view_t *font,
-                                        const graphics_rect_t *bounding) {
-  int32_t bounding_height = (int32_t)bounding->y1 - (int32_t)bounding->y0 + 1;
-  int16_t line_height = graphics_text_line_height_get(font);
-  int32_t line_y0 = bounding->y0;
-  if (bounding_height > line_height) {
-    line_y0 += (bounding_height - line_height) / 2;
-  }
-
-  int16_t centered_baseline_y = graphics_text_baseline_for_line_top(font, line_y0);
-  int16_t first_line_y = graphics_text_first_baseline_y(font, bounding);
-  if (centered_baseline_y < first_line_y) {
-    centered_baseline_y = first_line_y;
-  }
-  if (centered_baseline_y > bounding->y1) {
-    centered_baseline_y = bounding->y1;
-  }
-
-  return centered_baseline_y;
 }
 
 static int32_t clear_text_line(display_surface_t *surface,
