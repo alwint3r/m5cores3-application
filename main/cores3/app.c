@@ -26,6 +26,58 @@ static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
 static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
 static const TickType_t CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
 
+static bool cores3_app_power_status_is_charging(axp2101_charging_status_t status) {
+  switch (status) {
+    case AXP2101_CHARGING_STATUS_TRI_CHARGE:
+    case AXP2101_CHARGING_STATUS_PRE_CHARGE:
+    case AXP2101_CHARGING_STATUS_CONSTANT_CHARGE:
+    case AXP2101_CHARGING_STATUS_CONSTANT_VOLTAGE:
+      return true;
+
+    case AXP2101_CHARGING_STATUS_CHARGE_DONE:
+    case AXP2101_CHARGING_STATUS_NOT_CHARGING:
+    case AXP2101_CHARGING_STATUS_UNKNOWN:
+    default:
+      return false;
+  }
+}
+
+static cores3_gui_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
+  if (pmic == NULL) {
+    return CORES3_GUI_POWER_STATUS_UNKNOWN;
+  }
+
+  axp2101_status1_t status1 = {0};
+  int32_t err = axp2101_status1_get(pmic, &status1);
+  if (err != AXP2101_ERR_NONE) {
+    ESP_LOGW(CORES3_APP_LOG_TAG,
+             "Failed to read AXP2101 status1 for status bar: %s (%ld)",
+             axp2101_err_to_name(err),
+             (long)err);
+    return CORES3_GUI_POWER_STATUS_UNKNOWN;
+  }
+
+  if (!status1.vbus_good) {
+    return CORES3_GUI_POWER_STATUS_BATTERY;
+  }
+
+  axp2101_status2_t status2 = {0};
+  err = axp2101_status2_get(pmic, &status2);
+  if (err != AXP2101_ERR_NONE) {
+    ESP_LOGW(CORES3_APP_LOG_TAG,
+             "Failed to read AXP2101 status2 for status bar: %s (%ld)",
+             axp2101_err_to_name(err),
+             (long)err);
+    return CORES3_GUI_POWER_STATUS_USB_POWER;
+  }
+
+  if (cores3_app_power_status_is_charging(status2.charging_status)) {
+    return CORES3_GUI_POWER_STATUS_CHARGING;
+  }
+
+  return CORES3_GUI_POWER_STATUS_USB_POWER;
+}
+
 static struct {
   cores3_app_pmic_init_hook_t init_hook;
   cores3_app_pmic_periodic_hook_t periodic_hook;
@@ -186,21 +238,22 @@ static int32_t cores3_app_refresh_status_bar(void) {
            "Free Heap %lu B",
            (unsigned long)esp_get_free_heap_size());
 
-  return cores3_gui_app_set_status_bar(&app.gui, free_heap_str, false);
+  return cores3_gui_app_set_status_bar(
+      &app.gui, free_heap_str, false, cores3_app_power_status_read(&app.pmic));
 }
 
 static bool cores3_app_tick_deadline_reached(TickType_t now, TickType_t deadline) {
   return (int32_t)(now - deadline) >= 0;
 }
 
-static void cores3_app_run_periodic_pmic_hook_if_due(TickType_t *next_refresh_tick) {
+static bool cores3_app_run_periodic_pmic_hook_if_due(TickType_t *next_refresh_tick) {
   if (app_hooks.periodic_hook == NULL || next_refresh_tick == NULL) {
-    return;
+    return false;
   }
 
   TickType_t now = xTaskGetTickCount();
   if (!cores3_app_tick_deadline_reached(now, *next_refresh_tick)) {
-    return;
+    return false;
   }
 
   app_hooks.periodic_hook(&app.pmic, app_hooks.user_ctx);
@@ -208,6 +261,8 @@ static void cores3_app_run_periodic_pmic_hook_if_due(TickType_t *next_refresh_ti
   do {
     *next_refresh_tick += CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS;
   } while (cores3_app_tick_deadline_reached(now, *next_refresh_tick));
+
+  return true;
 }
 
 static void cores3_app_handle_gui_event(cores3_gui_app_event_t event, void *user_ctx) {
@@ -341,14 +396,18 @@ void cores3_app_main(void) {
     while (pending_notifications > 0U) {
       (void)cores3_app_refresh_status_bar();
       cores3_app_process_touch();
-      cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick);
+      if (cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick)) {
+        (void)cores3_app_refresh_status_bar();
+      }
       pending_notifications--;
       if (pending_notifications == 0U) {
         pending_notifications = ulTaskNotifyTake(pdTRUE, 0U);
       }
     }
 
-    cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick);
+    if (cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick)) {
+      (void)cores3_app_refresh_status_bar();
+    }
   }
 }
 

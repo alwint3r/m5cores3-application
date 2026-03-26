@@ -16,7 +16,10 @@
 #include "graphics/text_renderer.h"
 
 #define IMG2BITMAP_DECLARE_GRAPHICS_BITMAP_ICON
+#include "graphics/icons/icon_battery_4bpp.h"
+#include "graphics/icons/icon_battery_charging_4bpp.h"
 #include "graphics/icons/icon_reboot_4bpp.h"
+#include "graphics/icons/icon_usb_4bpp.h"
 #include "graphics/icons/icon_wifi_connected_4bpp.h"
 #include "graphics/icons/icon_wifi_disconnected_4bpp.h"
 
@@ -25,6 +28,9 @@ static const uint16_t CORES3_GUI_TEXT_COLOR = 0x0000;
 static const uint16_t CORES3_GUI_STATUS_BG_COLOR = 0xB71F;
 static const uint16_t CORES3_GUI_REBOOT_ICON_COLOR = 0xF800;
 static const char *CORES3_GUI_LOG_TAG = "CORES3_GUI";
+static const int16_t CORES3_GUI_STATUS_ICON_SIZE = 24;
+static const int16_t CORES3_GUI_STATUS_ICON_PADDING_RIGHT = 5;
+static const int16_t CORES3_GUI_STATUS_ICON_GAP = 4;
 
 static int32_t cores3_gui_require_owner_task(const cores3_gui_app_t *gui) {
   if (gui == NULL || !gui->initialized) {
@@ -95,6 +101,13 @@ static void cores3_gui_layout_init(cores3_gui_app_t *gui) {
   const uint16_t display_width = cores3_display_width();
   const uint16_t display_height = cores3_display_height();
   const uint16_t status_bar_height = 32;
+  const int16_t status_icon_y0 = (int16_t)(display_height - status_bar_height +
+                                           ((status_bar_height - CORES3_GUI_STATUS_ICON_SIZE) / 2));
+  const int16_t status_icon_y1 = (int16_t)(status_icon_y0 + CORES3_GUI_STATUS_ICON_SIZE - 1);
+  const int16_t wifi_x1 = (int16_t)(display_width - CORES3_GUI_STATUS_ICON_PADDING_RIGHT - 1);
+  const int16_t wifi_x0 = (int16_t)(wifi_x1 - CORES3_GUI_STATUS_ICON_SIZE + 1);
+  const int16_t power_x1 = (int16_t)(wifi_x0 - CORES3_GUI_STATUS_ICON_GAP - 1);
+  const int16_t power_x0 = (int16_t)(power_x1 - CORES3_GUI_STATUS_ICON_SIZE + 1);
 
   gui->status_bar_rect = (graphics_rect_t){
       .x0 = 0,
@@ -103,16 +116,23 @@ static void cores3_gui_layout_init(cores3_gui_app_t *gui) {
       .y1 = (int16_t)(display_height - 1U),
   };
 
+  gui->power_status_rect = (graphics_rect_t){
+      .x0 = power_x0,
+      .y0 = status_icon_y0,
+      .x1 = power_x1,
+      .y1 = status_icon_y1,
+  };
+
   gui->wifi_status_rect = (graphics_rect_t){
-      .x0 = (int16_t)(gui->status_bar_rect.x1 - icon_wifi_disconnected.width - 5),
-      .y0 = (int16_t)(gui->status_bar_rect.y0 + 5),
-      .x1 = (int16_t)(gui->status_bar_rect.x1 - 5),
-      .y1 = (int16_t)(gui->status_bar_rect.y1 - 5),
+      .x0 = wifi_x0,
+      .y0 = status_icon_y0,
+      .x1 = wifi_x1,
+      .y1 = status_icon_y1,
   };
 
   gui->status_text_rect = gui->status_bar_rect;
   gui->status_text_rect.x0 += 10;
-  gui->status_text_rect.x1 = (int16_t)(gui->wifi_status_rect.x0 - 6);
+  gui->status_text_rect.x1 = (int16_t)(gui->power_status_rect.x0 - 6);
 
   gui->main_text_content_rect = (graphics_rect_t){
       .x0 = 10,
@@ -179,6 +199,49 @@ static int32_t cores3_gui_render_status_wifi(cores3_gui_app_t *gui) {
   return ILI9342_ERR_NONE;
 }
 
+static int32_t cores3_gui_render_status_power(cores3_gui_app_t *gui) {
+  if (gui == NULL || gui->surface == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int32_t err =
+      cores3_gui_fill_rect(gui->surface, &gui->power_status_rect, CORES3_GUI_STATUS_BG_COLOR);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  const graphics_bitmap_icon_t *power_icon = &icon_battery;
+  switch (gui->power_status) {
+    case CORES3_GUI_POWER_STATUS_CHARGING:
+      power_icon = &icon_battery_charging;
+      break;
+    case CORES3_GUI_POWER_STATUS_USB_POWER:
+      power_icon = &icon_usb;
+      break;
+    case CORES3_GUI_POWER_STATUS_BATTERY:
+    case CORES3_GUI_POWER_STATUS_UNKNOWN:
+    default:
+      power_icon = &icon_battery;
+      break;
+  }
+
+  int16_t power_icon_x = 0;
+  int16_t power_icon_y = 0;
+  err = graphics_bitmap_icon_center_position(
+      power_icon, &gui->power_status_rect, &power_icon_x, &power_icon_y);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  return graphics_draw_bitmap_icon(gui->surface,
+                                   power_icon,
+                                   power_icon_x,
+                                   power_icon_y,
+                                   &gui->power_status_rect,
+                                   CORES3_GUI_TEXT_COLOR,
+                                   CORES3_GUI_STATUS_BG_COLOR);
+}
+
 static int32_t cores3_gui_render_status_text(cores3_gui_app_t *gui) {
   if (gui == NULL || gui->surface == NULL) {
     return ILI9342_ERR_INVALID_ARG;
@@ -219,6 +282,11 @@ static int32_t cores3_gui_render_status_bar(cores3_gui_app_t *gui) {
   }
 
   err = cores3_gui_render_status_wifi(gui);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  err = cores3_gui_render_status_power(gui);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
@@ -370,7 +438,8 @@ int32_t cores3_gui_app_set_main_text_content(cores3_gui_app_t *gui, const char *
 
 int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
                                       const char *text,
-                                      bool wifi_connected) {
+                                      bool wifi_connected,
+                                      cores3_gui_power_status_t power_status) {
   int32_t err = cores3_gui_require_owner_task(gui);
   if (err != ILI9342_ERR_NONE) {
     return err;
@@ -381,16 +450,25 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
 
   bool text_changed = strcmp(gui->status_text, next_status_text) != 0;
   bool wifi_changed = gui->wifi_connected != wifi_connected;
-  if (!text_changed && !wifi_changed) {
+  bool power_changed = gui->power_status != power_status;
+  if (!text_changed && !wifi_changed && !power_changed) {
     return ILI9342_ERR_NONE;
   }
 
   cores3_gui_copy_string(gui->status_text, sizeof(gui->status_text), next_status_text);
   gui->wifi_connected = wifi_connected;
+  gui->power_status = power_status;
 
   err = ILI9342_ERR_NONE;
   if (wifi_changed) {
     err = cores3_gui_render_status_wifi(gui);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+  }
+
+  if (power_changed) {
+    err = cores3_gui_render_status_power(gui);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }
