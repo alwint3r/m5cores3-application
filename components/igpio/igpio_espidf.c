@@ -121,8 +121,7 @@ static int32_t igpio_pull_mode_to_esp(igpio_pull_mode_t pull_mode,
   }
 }
 
-static int32_t igpio_intr_type_to_esp(igpio_intr_type_t intr_type,
-                                      gpio_int_type_t *ret_intr_type) {
+static int32_t igpio_intr_type_to_esp(igpio_intr_type_t intr_type, gpio_int_type_t *ret_intr_type) {
   if (ret_intr_type == NULL) {
     return IGPIO_ERR_INVALID_ARG;
   }

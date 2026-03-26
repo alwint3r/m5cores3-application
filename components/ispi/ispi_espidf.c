@@ -291,8 +291,7 @@ int32_t ispi_del_device(ispi_device_handle_t device) {
   return ISPI_ERR_NONE;
 }
 
-int32_t ispi_device_transfer(ispi_device_handle_t device,
-                             const ispi_transaction_t *transaction) {
+int32_t ispi_device_transfer(ispi_device_handle_t device, const ispi_transaction_t *transaction) {
   if (device == NULL || transaction == NULL) {
     return ISPI_ERR_INVALID_ARG;
   }

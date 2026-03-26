@@ -34,11 +34,11 @@ extern "C" {
  * @brief Supported GPIO pin modes.
  */
 typedef enum {
-  IGPIO_MODE_DISABLED = 0,         /**< Disable both input and output. */
-  IGPIO_MODE_INPUT = 1,            /**< Enable input only. */
-  IGPIO_MODE_OUTPUT = 2,           /**< Enable output only. */
-  IGPIO_MODE_INPUT_OUTPUT = 3,     /**< Enable both input and output. */
-  IGPIO_MODE_OUTPUT_OPEN_DRAIN = 4, /**< Enable open-drain output only. */
+  IGPIO_MODE_DISABLED = 0,                /**< Disable both input and output. */
+  IGPIO_MODE_INPUT = 1,                   /**< Enable input only. */
+  IGPIO_MODE_OUTPUT = 2,                  /**< Enable output only. */
+  IGPIO_MODE_INPUT_OUTPUT = 3,            /**< Enable both input and output. */
+  IGPIO_MODE_OUTPUT_OPEN_DRAIN = 4,       /**< Enable open-drain output only. */
   IGPIO_MODE_INPUT_OUTPUT_OPEN_DRAIN = 5, /**< Enable input and open-drain output. */
 } igpio_mode_t;
 
@@ -46,22 +46,22 @@ typedef enum {
  * @brief Supported GPIO internal pull resistor modes.
  */
 typedef enum {
-  IGPIO_PULL_FLOATING = 0,      /**< Disable pull-up and pull-down. */
-  IGPIO_PULL_UP = 1,            /**< Enable pull-up only. */
-  IGPIO_PULL_DOWN = 2,          /**< Enable pull-down only. */
-  IGPIO_PULL_UP_DOWN = 3,       /**< Enable both pull-up and pull-down. */
+  IGPIO_PULL_FLOATING = 0, /**< Disable pull-up and pull-down. */
+  IGPIO_PULL_UP = 1,       /**< Enable pull-up only. */
+  IGPIO_PULL_DOWN = 2,     /**< Enable pull-down only. */
+  IGPIO_PULL_UP_DOWN = 3,  /**< Enable both pull-up and pull-down. */
 } igpio_pull_mode_t;
 
 /**
  * @brief Supported GPIO interrupt trigger types.
  */
 typedef enum {
-  IGPIO_INTR_DISABLED = 0,    /**< Disable interrupts for the pin. */
-  IGPIO_INTR_POSEDGE = 1,     /**< Interrupt on rising edge. */
-  IGPIO_INTR_NEGEDGE = 2,     /**< Interrupt on falling edge. */
-  IGPIO_INTR_ANYEDGE = 3,     /**< Interrupt on either edge. */
-  IGPIO_INTR_LOW_LEVEL = 4,   /**< Interrupt while input is low. */
-  IGPIO_INTR_HIGH_LEVEL = 5,  /**< Interrupt while input is high. */
+  IGPIO_INTR_DISABLED = 0,   /**< Disable interrupts for the pin. */
+  IGPIO_INTR_POSEDGE = 1,    /**< Interrupt on rising edge. */
+  IGPIO_INTR_NEGEDGE = 2,    /**< Interrupt on falling edge. */
+  IGPIO_INTR_ANYEDGE = 3,    /**< Interrupt on either edge. */
+  IGPIO_INTR_LOW_LEVEL = 4,  /**< Interrupt while input is low. */
+  IGPIO_INTR_HIGH_LEVEL = 5, /**< Interrupt while input is high. */
 } igpio_intr_type_t;
 
 /**

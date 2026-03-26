@@ -35,8 +35,7 @@ static int32_t esp_err_to_ii2c(esp_err_t err) {
   }
 }
 
-static int32_t ii2c_clk_src_to_esp(ii2c_clock_source_t clk_src,
-                                   i2c_clock_source_t *ret_clk_src) {
+static int32_t ii2c_clk_src_to_esp(ii2c_clock_source_t clk_src, i2c_clock_source_t *ret_clk_src) {
   if (ret_clk_src == NULL) {
     return II2C_ERR_INVALID_ARG;
   }

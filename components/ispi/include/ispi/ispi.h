@@ -54,11 +54,11 @@ typedef enum {
  * @brief Master-bus configuration.
  */
 typedef struct {
-  ispi_host_t host;             /**< SPI host to initialize. */
-  int32_t mosi_io_num;          /**< MOSI GPIO number, or -1 if unused. */
-  int32_t miso_io_num;          /**< MISO GPIO number, or -1 if unused. */
-  int32_t sclk_io_num;          /**< Clock GPIO number. */
-  int32_t max_transfer_sz;      /**< Maximum transfer size in bytes, or 0 for ESP-IDF default. */
+  ispi_host_t host;               /**< SPI host to initialize. */
+  int32_t mosi_io_num;            /**< MOSI GPIO number, or -1 if unused. */
+  int32_t miso_io_num;            /**< MISO GPIO number, or -1 if unused. */
+  int32_t sclk_io_num;            /**< Clock GPIO number. */
+  int32_t max_transfer_sz;        /**< Maximum transfer size in bytes, or 0 for ESP-IDF default. */
   ispi_dma_channel_t dma_channel; /**< DMA selection. */
 } ispi_master_bus_config_t;
 
@@ -66,14 +66,14 @@ typedef struct {
  * @brief Attached device configuration.
  */
 typedef struct {
-  int32_t cs_io_num;        /**< Chip-select GPIO number, or -1 if not used. */
-  uint32_t clock_speed_hz;  /**< Requested SPI clock speed in Hz. */
-  uint8_t mode;             /**< SPI mode 0-3. */
-  int32_t input_delay_ns;   /**< Input delay in nanoseconds, or 0 for default timing. */
-  uint16_t queue_size;      /**< Internal ESP-IDF queue depth for this device. */
-  bool lsb_first;           /**< Shift both TX and RX least-significant bit first. */
-  bool half_duplex;         /**< Use half-duplex transactions. */
-  bool use_3wire;           /**< Use MOSI for both write and read phases. */
+  int32_t cs_io_num;       /**< Chip-select GPIO number, or -1 if not used. */
+  uint32_t clock_speed_hz; /**< Requested SPI clock speed in Hz. */
+  uint8_t mode;            /**< SPI mode 0-3. */
+  int32_t input_delay_ns;  /**< Input delay in nanoseconds, or 0 for default timing. */
+  uint16_t queue_size;     /**< Internal ESP-IDF queue depth for this device. */
+  bool lsb_first;          /**< Shift both TX and RX least-significant bit first. */
+  bool half_duplex;        /**< Use half-duplex transactions. */
+  bool use_3wire;          /**< Use MOSI for both write and read phases. */
 } ispi_device_config_t;
 
 /**
@@ -86,8 +86,8 @@ typedef struct {
 typedef struct {
   const uint8_t *tx_buffer; /**< Bytes to transmit, or NULL when no TX phase is used. */
   size_t tx_size;           /**< Number of bytes to transmit. */
-  uint8_t *rx_buffer;       /**< Destination for received bytes, or NULL when no RX phase is used. */
-  size_t rx_size;           /**< Number of bytes to receive. */
+  uint8_t *rx_buffer; /**< Destination for received bytes, or NULL when no RX phase is used. */
+  size_t rx_size;     /**< Number of bytes to receive. */
 } ispi_transaction_t;
 
 /** @brief Opaque master-bus handle. */
@@ -164,8 +164,7 @@ int32_t ispi_del_device(ispi_device_handle_t device);
  *
  * @return `ISPI_ERR_NONE` on success, or an `ISPI_ERR_*` code on failure.
  */
-int32_t ispi_device_transfer(ispi_device_handle_t device,
-                             const ispi_transaction_t *transaction);
+int32_t ispi_device_transfer(ispi_device_handle_t device, const ispi_transaction_t *transaction);
 
 #ifdef __cplusplus
 }
