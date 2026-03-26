@@ -20,6 +20,7 @@ typedef void (*cores3_gui_app_event_callback_t)(cores3_gui_app_event_t event, vo
 
 typedef struct {
   display_surface_t *surface;
+  TaskHandle_t owner_task;
   bmf_font_view_t center_font;
   bmf_font_view_t status_font;
   graphics_rect_t main_text_content_rect;
@@ -36,10 +37,9 @@ typedef struct {
 } cores3_gui_app_t;
 
 int32_t cores3_gui_app_init(cores3_gui_app_t *gui, display_surface_t *surface);
+void cores3_gui_app_deinit(cores3_gui_app_t *gui);
 int32_t cores3_gui_app_set_main_text_content(cores3_gui_app_t *gui, const char *text);
-int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
-                                      const char *text,
-                                      bool wifi_connected);
+int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui, const char *text, bool wifi_connected);
 void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,
                                        cores3_gui_app_event_callback_t callback,
                                        void *user_ctx);

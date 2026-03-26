@@ -79,7 +79,7 @@ static int32_t cores3_board_init_display_spi(cores3_board_t *board) {
   return ISPI_ERR_NONE;
 }
 
-static void cores3_board_cleanup(cores3_board_t *board) {
+void cores3_board_deinit(cores3_board_t *board) {
   if (board == NULL) {
     return;
   }
@@ -136,19 +136,19 @@ int32_t cores3_board_init(cores3_board_t *board) {
 
   err = cores3_check_i2c_devices_address(board);
   if (err != 0) {
-    cores3_board_cleanup(board);
+    cores3_board_deinit(board);
     return err;
   }
 
   err = cores3_board_init_i2c_devices(board);
   if (err != 0) {
-    cores3_board_cleanup(board);
+    cores3_board_deinit(board);
     return err;
   }
 
   err = cores3_board_init_display_spi(board);
   if (err != 0) {
-    cores3_board_cleanup(board);
+    cores3_board_deinit(board);
     return err;
   }
 

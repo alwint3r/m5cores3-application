@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <ili9342/ili9342.h>
 
 typedef struct {
@@ -20,6 +22,7 @@ typedef struct {
   size_t max_transfer_bytes;
   uint8_t *row_buffer;
   size_t row_buffer_bytes;
+  TaskHandle_t owner_task;
 } display_surface_t;
 
 int32_t display_surface_init(display_surface_t *surface,
@@ -28,6 +31,8 @@ int32_t display_surface_init(display_surface_t *surface,
                              uint16_t height,
                              size_t max_transfer_bytes);
 void display_surface_deinit(display_surface_t *surface);
+TaskHandle_t display_surface_owner_task_get(const display_surface_t *surface);
+int32_t display_surface_require_owner_task(const display_surface_t *surface);
 
 bool graphics_rect_is_valid(const display_surface_t *surface, const graphics_rect_t *rect);
 bool graphics_rect_clip_to_bounds(const graphics_rect_t *bounds,

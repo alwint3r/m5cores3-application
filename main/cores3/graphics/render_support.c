@@ -22,7 +22,12 @@ void graphics_fill_color_span(uint8_t *buffer, size_t pixel_count, uint16_t colo
 int32_t graphics_write_buffer_chunked(display_surface_t *surface,
                                       const uint8_t *buffer,
                                       size_t len) {
-  if (surface == NULL || surface->panel == NULL || buffer == NULL || len == 0U) {
+  int32_t err = display_surface_require_owner_task(surface);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  if (surface->panel == NULL || buffer == NULL || len == 0U) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
@@ -38,7 +43,7 @@ int32_t graphics_write_buffer_chunked(display_surface_t *surface,
       bytes_this_round = chunk_bytes;
     }
 
-    int32_t err = ili9342_write_data(surface->panel, buffer + offset, bytes_this_round);
+    err = ili9342_write_data(surface->panel, buffer + offset, bytes_this_round);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }

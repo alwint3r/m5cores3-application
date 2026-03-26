@@ -59,6 +59,12 @@ int32_t display_surface_init(display_surface_t *surface,
   }
 
   memset(surface, 0, sizeof(*surface));
+  surface->owner_task = xTaskGetCurrentTaskHandle();
+  if (surface->owner_task == NULL) {
+    memset(surface, 0, sizeof(*surface));
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
   surface->panel = panel;
   surface->width = width;
   surface->height = height;
@@ -80,6 +86,27 @@ void display_surface_deinit(display_surface_t *surface) {
 
   free(surface->row_buffer);
   memset(surface, 0, sizeof(*surface));
+}
+
+TaskHandle_t display_surface_owner_task_get(const display_surface_t *surface) {
+  if (surface == NULL) {
+    return NULL;
+  }
+
+  return surface->owner_task;
+}
+
+int32_t display_surface_require_owner_task(const display_surface_t *surface) {
+  if (surface == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+  if (surface->owner_task == NULL || current_task == NULL || current_task != surface->owner_task) {
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
+  return ILI9342_ERR_NONE;
 }
 
 bool graphics_rect_is_valid(const display_surface_t *surface, const graphics_rect_t *rect) {
@@ -154,8 +181,13 @@ int32_t graphics_fill_rect(display_surface_t *surface,
                            uint16_t x1,
                            uint16_t y1,
                            uint16_t color) {
-  if (surface == NULL || surface->panel == NULL || surface->row_buffer == NULL || x1 < x0 ||
-      y1 < y0 || x1 >= surface->width || y1 >= surface->height) {
+  int32_t err = display_surface_require_owner_task(surface);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  if (surface->panel == NULL || surface->row_buffer == NULL || x1 < x0 || y1 < y0 ||
+      x1 >= surface->width || y1 >= surface->height) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
@@ -167,7 +199,7 @@ int32_t graphics_fill_rect(display_surface_t *surface,
 
   graphics_fill_color_span(surface->row_buffer, row_pixels, color);
 
-  int32_t err = ili9342_address_window_set(surface->panel, x0, y0, x1, y1);
+  err = ili9342_address_window_set(surface->panel, x0, y0, x1, y1);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }

@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include <ili9342/ili9342.h>
+#include <esp_log.h>
 
 #include "display/cores3_display.h"
 #include "graphics/bitmap_icon.h"
@@ -23,6 +24,21 @@ static const uint16_t CORES3_GUI_BG_COLOR = 0xFFFF;
 static const uint16_t CORES3_GUI_TEXT_COLOR = 0x0000;
 static const uint16_t CORES3_GUI_STATUS_BG_COLOR = 0xB71F;
 static const uint16_t CORES3_GUI_REBOOT_ICON_COLOR = 0xF800;
+static const char *CORES3_GUI_LOG_TAG = "CORES3_GUI";
+
+static int32_t cores3_gui_require_owner_task(const cores3_gui_app_t *gui) {
+  if (gui == NULL || !gui->initialized) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+  if (gui->owner_task == NULL || current_task == NULL || current_task != gui->owner_task) {
+    ESP_LOGE(CORES3_GUI_LOG_TAG, "GUI access attempted from a non-owner task");
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
+  return ILI9342_ERR_NONE;
+}
 
 static int16_t cores3_gui_text_center_baseline_y(const bmf_font_view_t *font,
                                                  const graphics_rect_t *bounding) {
@@ -178,8 +194,7 @@ static int32_t cores3_gui_render_status_text(cores3_gui_app_t *gui) {
     return ILI9342_ERR_NONE;
   }
 
-  int16_t text_y =
-      cores3_gui_text_center_baseline_y(&gui->status_font, &gui->status_text_rect);
+  int16_t text_y = cores3_gui_text_center_baseline_y(&gui->status_font, &gui->status_text_rect);
   return graphics_draw_text_bounded(gui->surface,
                                     &gui->status_font,
                                     gui->status_text,
@@ -230,17 +245,17 @@ static int32_t cores3_gui_render_main_text_content(cores3_gui_app_t *gui) {
     return ILI9342_ERR_NONE;
   }
 
-  return graphics_draw_text_bounded(gui->surface,
-                                    &gui->center_font,
-                                    gui->main_text_content,
-                                    gui->main_text_content_rect.x0,
-                                    graphics_text_first_baseline_y(&gui->center_font,
-                                                                   &gui->main_text_content_rect),
-                                    &gui->main_text_content_rect,
-                                    CORES3_GUI_TEXT_COLOR,
-                                    CORES3_GUI_BG_COLOR,
-                                    NULL,
-                                    NULL);
+  return graphics_draw_text_bounded(
+      gui->surface,
+      &gui->center_font,
+      gui->main_text_content,
+      gui->main_text_content_rect.x0,
+      graphics_text_first_baseline_y(&gui->center_font, &gui->main_text_content_rect),
+      &gui->main_text_content_rect,
+      CORES3_GUI_TEXT_COLOR,
+      CORES3_GUI_BG_COLOR,
+      NULL,
+      NULL);
 }
 
 static int32_t cores3_gui_render_top_button(cores3_gui_app_t *gui) {
@@ -299,38 +314,66 @@ int32_t cores3_gui_app_init(cores3_gui_app_t *gui, display_surface_t *surface) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
+  int32_t err = display_surface_require_owner_task(surface);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
   memset(gui, 0, sizeof(*gui));
   gui->surface = surface;
+  gui->owner_task = xTaskGetCurrentTaskHandle();
+  if (gui->owner_task == NULL || gui->owner_task != display_surface_owner_task_get(surface)) {
+    memset(gui, 0, sizeof(*gui));
+    return ILI9342_ERR_INVALID_STATE;
+  }
 
-  int32_t err =
-      cores3_gui_load_font(&gui->center_font, open_sans_regular_32, open_sans_regular_32_len);
+  err = cores3_gui_load_font(&gui->center_font, open_sans_regular_32, open_sans_regular_32_len);
   if (err != BMF_STATUS_OK) {
+    cores3_gui_app_deinit(gui);
     return err;
   }
 
   err = cores3_gui_load_font(&gui->status_font, open_sans_regular_16, open_sans_regular_16_len);
   if (err != BMF_STATUS_OK) {
+    cores3_gui_app_deinit(gui);
     return err;
   }
 
   cores3_gui_layout_init(gui);
-  gui->initialized = true;
+  err = cores3_gui_render_full(gui);
+  if (err != ILI9342_ERR_NONE) {
+    cores3_gui_app_deinit(gui);
+    return err;
+  }
 
-  return cores3_gui_render_full(gui);
+  gui->initialized = true;
+  return ILI9342_ERR_NONE;
+}
+
+void cores3_gui_app_deinit(cores3_gui_app_t *gui) {
+  if (gui == NULL) {
+    return;
+  }
+
+  memset(gui, 0, sizeof(*gui));
 }
 
 int32_t cores3_gui_app_set_main_text_content(cores3_gui_app_t *gui, const char *text) {
-  if (gui == NULL || !gui->initialized) {
-    return ILI9342_ERR_INVALID_ARG;
+  int32_t err = cores3_gui_require_owner_task(gui);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
   }
 
   cores3_gui_copy_string(gui->main_text_content, sizeof(gui->main_text_content), text);
   return cores3_gui_render_main_text_content(gui);
 }
 
-int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui, const char *text, bool wifi_connected) {
-  if (gui == NULL || !gui->initialized) {
-    return ILI9342_ERR_INVALID_ARG;
+int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
+                                      const char *text,
+                                      bool wifi_connected) {
+  int32_t err = cores3_gui_require_owner_task(gui);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
   }
 
   char next_status_text[CORES3_GUI_APP_STATUS_TEXT_MAX_LEN] = {0};
@@ -345,7 +388,7 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui, const char *text, b
   cores3_gui_copy_string(gui->status_text, sizeof(gui->status_text), next_status_text);
   gui->wifi_connected = wifi_connected;
 
-  int32_t err = ILI9342_ERR_NONE;
+  err = ILI9342_ERR_NONE;
   if (wifi_changed) {
     err = cores3_gui_render_status_wifi(gui);
     if (err != ILI9342_ERR_NONE) {
@@ -366,7 +409,8 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui, const char *text, b
 void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,
                                        cores3_gui_app_event_callback_t callback,
                                        void *user_ctx) {
-  if (gui == NULL) {
+  int32_t err = cores3_gui_require_owner_task(gui);
+  if (err != ILI9342_ERR_NONE) {
     return;
   }
 
@@ -378,8 +422,9 @@ int32_t cores3_gui_app_handle_touch(cores3_gui_app_t *gui,
                                     uint16_t x,
                                     uint16_t y,
                                     ft6x36_touch_event_t touch_event) {
-  if (gui == NULL || !gui->initialized) {
-    return ILI9342_ERR_INVALID_ARG;
+  int32_t err = cores3_gui_require_owner_task(gui);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
   }
 
   if (touch_event != FT6X36_TOUCH_EVENT_PRESS_DOWN) {
@@ -391,8 +436,7 @@ int32_t cores3_gui_app_handle_touch(cores3_gui_app_t *gui,
   }
 
   if (gui->event_callback != NULL) {
-    gui->event_callback(CORES3_GUI_APP_EVENT_REBOOT_BUTTON_PRESSED,
-                        gui->event_callback_user_ctx);
+    gui->event_callback(CORES3_GUI_APP_EVENT_REBOOT_BUTTON_PRESSED, gui->event_callback_user_ctx);
   }
 
   return ILI9342_ERR_NONE;

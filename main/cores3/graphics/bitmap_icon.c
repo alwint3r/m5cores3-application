@@ -77,7 +77,12 @@ int32_t graphics_draw_bitmap_icon(display_surface_t *surface,
                                   const graphics_rect_t *clip,
                                   uint16_t foreground_color,
                                   uint16_t background_color) {
-  if (surface == NULL || surface->panel == NULL || surface->row_buffer == NULL ||
+  int32_t err = display_surface_require_owner_task(surface);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  if (surface->panel == NULL || surface->row_buffer == NULL ||
       !graphics_bitmap_icon_is_valid(icon) || surface->width == 0U || surface->height == 0U) {
     return ILI9342_ERR_INVALID_ARG;
   }
@@ -113,11 +118,11 @@ int32_t graphics_draw_bitmap_icon(display_surface_t *surface,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = ili9342_address_window_set(surface->panel,
-                                           (uint16_t)visible.x0,
-                                           (uint16_t)visible.y0,
-                                           (uint16_t)visible.x1,
-                                           (uint16_t)visible.y1);
+  err = ili9342_address_window_set(surface->panel,
+                                   (uint16_t)visible.x0,
+                                   (uint16_t)visible.y0,
+                                   (uint16_t)visible.x1,
+                                   (uint16_t)visible.y1);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }

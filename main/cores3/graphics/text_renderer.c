@@ -430,6 +430,11 @@ static int32_t draw_char_array_bounded(display_surface_t *surface,
     return ILI9342_ERR_INVALID_ARG;
   }
 
+  int32_t err = display_surface_require_owner_task(surface);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
   int16_t first_line_y = graphics_text_first_baseline_y(font, bounding);
 
   int16_t pen_x = x;
@@ -465,14 +470,14 @@ static int32_t draw_char_array_bounded(display_surface_t *surface,
     char c = text[i];
 
     if (c == '\n') {
-      int32_t err = flush_prepared_glyph_run(surface,
-                                             font,
-                                             prepared_glyphs,
-                                             prepared_count,
-                                             has_visible_pixels,
-                                             &line_clip,
-                                             background_color,
-                                             foreground_color);
+      err = flush_prepared_glyph_run(surface,
+                                     font,
+                                     prepared_glyphs,
+                                     prepared_count,
+                                     has_visible_pixels,
+                                     &line_clip,
+                                     background_color,
+                                     foreground_color);
       if (err != ILI9342_ERR_NONE) {
         free(prepared_glyphs);
         return err;
@@ -611,14 +616,14 @@ static int32_t draw_char_array_bounded(display_surface_t *surface,
     }
   }
 
-  int32_t err = flush_prepared_glyph_run(surface,
-                                         font,
-                                         prepared_glyphs,
-                                         prepared_count,
-                                         has_visible_pixels,
-                                         &line_clip,
-                                         background_color,
-                                         foreground_color);
+  err = flush_prepared_glyph_run(surface,
+                                 font,
+                                 prepared_glyphs,
+                                 prepared_count,
+                                 has_visible_pixels,
+                                 &line_clip,
+                                 background_color,
+                                 foreground_color);
   free(prepared_glyphs);
   if (err != ILI9342_ERR_NONE) {
     return err;

@@ -14,3 +14,4 @@ struct cores3_board {
 };
 
 int32_t cores3_board_init(cores3_board_t *board);
+void cores3_board_deinit(cores3_board_t *board);
