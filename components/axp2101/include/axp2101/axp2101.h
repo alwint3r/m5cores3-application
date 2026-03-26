@@ -166,7 +166,12 @@ typedef enum axp2101_charging_status {
 typedef struct axp2101_status2_data axp2101_status2_t;
 /** @brief Decoded bit fields from `AXP2101_REG_PMU_STATUS2`. */
 struct axp2101_status2_data {
-  /** @brief Battery current direction decoded from bits 6:5. */
+  /**
+   * @brief Battery current direction decoded from bits 6:5.
+   *
+   * This field reports current flow direction only. The AXP2101 SWcharge V1.0
+   * datasheet does not provide a live battery-current magnitude ADC channel.
+   */
   axp2101_battery_current_direction_t battery_current_direction;
   /** @brief True when the PMIC reports the system is powered on. */
   bool system_power_on;
@@ -348,6 +353,61 @@ int32_t axp2101_irq_off_on_level_get(axp2101_t *pmic, axp2101_irq_off_on_level_t
  */
 int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic, const axp2101_irq_off_on_level_t *config);
 
+/**
+ * @brief Enable or disable the VBUS insert/remove IRQ sources.
+ *
+ * The AXP2101 groups VBUS hot-plug events in `AXP2101_REG_IRQ_ENABLE1`.
+ * Setting an enable bit to `true` allows that event to pull the shared PMIC
+ * IRQ pin low when it occurs.
+ *
+ * @param pmic Caller-owned transport-backed AXP2101 instance.
+ * @param insert_enabled True enables the VBUS-insert IRQ source.
+ * @param remove_enabled True enables the VBUS-remove IRQ source.
+ * @return `AXP2101_ERR_NONE` on success or a transport / validation error.
+ */
+int32_t axp2101_vbus_irq_configure(axp2101_t *pmic, bool insert_enabled, bool remove_enabled);
+
+/**
+ * @brief Read the pending VBUS IRQ bits from `AXP2101_REG_IRQ_STATUS1`.
+ *
+ * @param pmic Caller-owned transport-backed AXP2101 instance.
+ * @param out_insert_pending Output pointer that receives the VBUS-insert flag.
+ * @param out_remove_pending Output pointer that receives the VBUS-remove flag.
+ * @return `AXP2101_ERR_NONE` on success, `AXP2101_ERR_INVALID_ARG` when any
+ * output pointer is `NULL`, or a transport error.
+ */
+int32_t axp2101_vbus_irq_status_get(axp2101_t *pmic,
+                                    bool *out_insert_pending,
+                                    bool *out_remove_pending);
+
+/**
+ * @brief Clear selected pending VBUS IRQ bits in `AXP2101_REG_IRQ_STATUS1`.
+ *
+ * The AXP2101 IRQ status bits are write-one-to-clear. Passing `true` for a
+ * parameter writes `1` to that bit; passing `false` leaves it unchanged.
+ *
+ * @param pmic Caller-owned transport-backed AXP2101 instance.
+ * @param clear_insert True clears a pending VBUS-insert IRQ bit.
+ * @param clear_remove True clears a pending VBUS-remove IRQ bit.
+ * @return `AXP2101_ERR_NONE` on success or a transport / validation error.
+ */
+int32_t axp2101_vbus_irq_status_clear(axp2101_t *pmic, bool clear_insert, bool clear_remove);
+
+/**
+ * @brief Read and decode the configured input current limit in milliamps.
+ *
+ * This helper reads `AXP2101_REG_INPUT_CURRENT_LIMIT_CTRL` and decodes the
+ * PMIC selector value into one of the documented limits: 100, 500, 900, 1000,
+ * 1500, or 2000 mA.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param out_ma Output pointer that receives the decoded input current limit.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out_ma` is
+ * `NULL`, `II2C_ERR_INVALID_STATE` when the register contains a reserved
+ * selector value, or an `II2C_ERR_*` code from `ii2c`.
+ */
+int32_t axp2101_input_current_limit_get(axp2101_t *pmic, uint16_t *out_ma);
+
 typedef struct axp2101_charger_current_data axp2101_charger_current_t;
 /** @brief Decoded charger-current configuration values. */
 struct axp2101_charger_current_data {
@@ -375,6 +435,47 @@ struct axp2101_charger_current_data {
  * selector value, or an `II2C_ERR_*` code from `ii2c`.
  */
 int32_t axp2101_charger_current_get(axp2101_t *pmic, axp2101_charger_current_t *out);
+
+typedef struct axp2101_current_telemetry_data axp2101_current_telemetry_t;
+/**
+ * @brief Decoded current-related telemetry for the AXP2101.
+ *
+ * This structure combines the PMIC's documented current-flow direction and
+ * charger current-limit configuration. It does not contain a live current
+ * magnitude measurement because the AXP2101 SWcharge V1.0 datasheet documents
+ * ADC channels for voltage and temperature, not a battery-current ADC.
+ */
+struct axp2101_current_telemetry_data {
+  /** @brief Decoded PMU status bits, including battery current direction. */
+  axp2101_status2_t status2;
+  /** @brief Configured input current limit decoded from `AXP2101_REG_INPUT_CURRENT_LIMIT_CTRL`. */
+  uint16_t input_current_limit_ma;
+  /** @brief Decoded charger-current limit configuration. */
+  axp2101_charger_current_t charger_current;
+};
+
+/**
+ * @brief Read the supported current-related telemetry exposed by the PMIC.
+ *
+ * The helper combines `AXP2101_REG_PMU_STATUS2` with the charger-current
+ * configuration registers and returns:
+ *
+ * - battery current direction/status from PMU status bits 6:5
+ * - system power and VINDPM state from PMU status bits 4 and 3
+ * - charging phase from PMU status bits 2:0
+ * - configured input current limit from `AXP2101_REG_INPUT_CURRENT_LIMIT_CTRL`
+ * - configured precharge, constant-charge, and termination current limits
+ *
+ * The AXP2101 SWcharge V1.0 datasheet only documents ADC channels for VBAT,
+ * VBUS, VSYS, TS, and die temperature. Because of that, this API does not
+ * fabricate or estimate a live battery-current magnitude.
+ *
+ * @param dev Attached `ii2c` device handle for the AXP2101.
+ * @param out Output pointer that receives the decoded current telemetry.
+ * @return `II2C_ERR_NONE` on success, `II2C_ERR_INVALID_ARG` when `out` is
+ * `NULL`, or an `II2C_ERR_*` code from `ii2c`.
+ */
+int32_t axp2101_current_telemetry_get(axp2101_t *pmic, axp2101_current_telemetry_t *out);
 
 /** @brief CHGLED function choices used by `AXP2101_REG_CHGLED_CTRL` bits 2:1. */
 typedef enum axp2101_chgled_function {

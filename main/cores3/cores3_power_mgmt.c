@@ -78,6 +78,42 @@ const char *axp2101_charging_status_to_string(axp2101_charging_status_t status) 
   return "unknown";
 }
 
+static const char *axp2101_battery_current_direction_to_string(
+    axp2101_battery_current_direction_t direction) {
+  switch (direction) {
+    case AXP2101_BATTERY_CURRENT_DIRECTION_STANDBY:
+      return "standby";
+    case AXP2101_BATTERY_CURRENT_DIRECTION_CHARGE:
+      return "charge";
+    case AXP2101_BATTERY_CURRENT_DIRECTION_DISCHARGE:
+      return "discharge";
+    case AXP2101_BATTERY_CURRENT_DIRECTION_RESERVED:
+      return "reserved";
+  }
+
+  return "unknown";
+}
+
+static void log_axp2101_current_telemetry(axp2101_t *pmic) {
+  axp2101_current_telemetry_t telemetry = {0};
+  int32_t err = axp2101_current_telemetry_get(pmic, &telemetry);
+  if (err != AXP2101_ERR_NONE) {
+    printf("AXP2101 current telemetry unavailable: %s\n", cores3_power_mgmt_err_to_name(err));
+    return;
+  }
+
+  printf(
+      "AXP2101 current telemetry: battery=%s, charging=%s, input-limit=%u mA, "
+      "precharge=%u mA, charge=%u mA, termination=%u mA (%s)\n",
+      axp2101_battery_current_direction_to_string(telemetry.status2.battery_current_direction),
+      axp2101_charging_status_to_string(telemetry.status2.charging_status),
+      telemetry.input_current_limit_ma,
+      telemetry.charger_current.precharge_current_ma,
+      telemetry.charger_current.constant_charge_current_ma,
+      telemetry.charger_current.termination_current_ma,
+      telemetry.charger_current.termination_enabled ? "enabled" : "disabled");
+}
+
 static int32_t configure_aw9523b_boost_enable(aw9523b_t *expander) {
   int32_t err = aw9523b_port_dir_set(expander,
                                      CORES3_AW9523B_BOOST_EN_PORT,
@@ -339,7 +375,13 @@ static int32_t apply_cores3_axp2101_startup(axp2101_t *pmic) {
     return err;
   }
 
-  return configure_axp2101_adc(pmic);
+  err = configure_axp2101_adc(pmic);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  log_axp2101_current_telemetry(pmic);
+  return AXP2101_ERR_NONE;
 }
 
 int32_t cores3_power_mgmt_init(ii2c_device_handle_t device, aw9523b_t *expander, axp2101_t *pmic) {

@@ -17,6 +17,8 @@ extern "C" {
 
 /** @brief PMU common-configuration register. */
 #define AXP2101_REG_PMU_COMMON_CFG 0x10
+/** @brief Input current-limit control register. */
+#define AXP2101_REG_INPUT_CURRENT_LIMIT_CTRL 0x16
 /** @brief Charge, fuel-gauge, and watchdog control register. */
 #define AXP2101_REG_CHARGE_GAUGE_WDT_CTRL 0x18
 
@@ -25,6 +27,12 @@ extern "C" {
 
 /** @brief ADC channel enable register. */
 #define AXP2101_REG_ADC_EN 0x30
+
+/** @brief IRQ-enable register 1 used for VBUS and battery hot-plug events. */
+#define AXP2101_REG_IRQ_ENABLE1 0x41
+
+/** @brief IRQ-status register 1 used for VBUS and battery hot-plug events. */
+#define AXP2101_REG_IRQ_STATUS1 0x49
 
 /** @brief High byte of the VBAT ADC result register pair. */
 #define AXP2101_REG_VBAT_H 0x34
@@ -78,6 +86,22 @@ extern "C" {
 
 /** @brief Mask for the IRQ timing field in `AXP2101_REG_IRQ_OFF_ON_LEVEL`. */
 #define AXP2101_IRQ_OFF_ON_LEVEL_MASK_IRQ 0x30
+
+/** @brief Enable bit for the VBUS-insert IRQ in `AXP2101_REG_IRQ_ENABLE1`. */
+#define AXP2101_IRQ_ENABLE1_VINSERT_IRQ_EN (1 << 7)
+
+/** @brief Enable bit for the VBUS-remove IRQ in `AXP2101_REG_IRQ_ENABLE1`. */
+#define AXP2101_IRQ_ENABLE1_VREMOVE_IRQ_EN (1 << 6)
+
+/** @brief Status bit for the VBUS-insert IRQ in `AXP2101_REG_IRQ_STATUS1`. */
+#define AXP2101_IRQ_STATUS1_VINSERT_IRQ (1 << 7)
+
+/** @brief Status bit for the VBUS-remove IRQ in `AXP2101_REG_IRQ_STATUS1`. */
+#define AXP2101_IRQ_STATUS1_VREMOVE_IRQ (1 << 6)
+
+/** @brief Mask for the input current-limit selector field in
+ * `AXP2101_REG_INPUT_CURRENT_LIMIT_CTRL`. */
+#define AXP2101_INPUT_CURRENT_LIMIT_CTRL_MASK 0x07
 
 /** @brief Mask for the precharge-current selector field in `AXP2101_REG_PRECHG_CURRENT_LIMIT`. */
 #define AXP2101_PRECHG_CURRENT_LIMIT_MASK 0x0F
@@ -161,7 +185,14 @@ extern "C" {
 #define AXP2101_ADC_EN_VBUS (1 << 2)
 /** @brief Enable the TS pin ADC channel. */
 #define AXP2101_ADC_EN_TS (1 << 1)
-/** @brief Enable the battery voltage/current ADC channel. */
+/**
+ * @brief Enable the battery voltage ADC channel.
+ *
+ * The AXP2101 SWcharge V1.0 datasheet documents ADC channels for voltage and
+ * temperature only. This component does not expose a live battery-current
+ * magnitude because that measurement is not described by this datasheet
+ * revision.
+ */
 #define AXP2101_ADC_EN_BATT (1)
 /** @brief Bitwise OR of all ADC channel-enable bits exported by this component. */
 #define AXP2101_ADC_EN_ALL                                                                   \

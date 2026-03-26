@@ -24,6 +24,13 @@
 
 static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
 static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
+static const TickType_t CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
+
+static struct {
+  cores3_app_pmic_init_hook_t init_hook;
+  cores3_app_pmic_periodic_hook_t periodic_hook;
+  void *user_ctx;
+} app_hooks = {0};
 
 typedef struct {
   aw9523b_t io_expander;
@@ -43,6 +50,22 @@ typedef struct {
 } app_t;
 
 static app_t app = {0};
+
+void cores3_app_set_pmic_hooks(cores3_app_pmic_init_hook_t init_hook,
+                               cores3_app_pmic_periodic_hook_t periodic_hook,
+                               void *user_ctx) {
+  app_hooks.init_hook = init_hook;
+  app_hooks.periodic_hook = periodic_hook;
+  app_hooks.user_ctx = user_ctx;
+}
+
+int32_t cores3_app_set_main_text_content(const char *text) {
+  if (!app.gui_initialized) {
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
+  return cores3_gui_app_set_main_text_content(&app.gui, text);
+}
 
 static void cores3_app_cleanup(void) {
   if (app.gui_initialized) {
@@ -166,6 +189,27 @@ static int32_t cores3_app_refresh_status_bar(void) {
   return cores3_gui_app_set_status_bar(&app.gui, free_heap_str, false);
 }
 
+static bool cores3_app_tick_deadline_reached(TickType_t now, TickType_t deadline) {
+  return (int32_t)(now - deadline) >= 0;
+}
+
+static void cores3_app_run_periodic_pmic_hook_if_due(TickType_t *next_refresh_tick) {
+  if (app_hooks.periodic_hook == NULL || next_refresh_tick == NULL) {
+    return;
+  }
+
+  TickType_t now = xTaskGetTickCount();
+  if (!cores3_app_tick_deadline_reached(now, *next_refresh_tick)) {
+    return;
+  }
+
+  app_hooks.periodic_hook(&app.pmic, app_hooks.user_ctx);
+
+  do {
+    *next_refresh_tick += CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS;
+  } while (cores3_app_tick_deadline_reached(now, *next_refresh_tick));
+}
+
 static void cores3_app_handle_gui_event(cores3_gui_app_event_t event, void *user_ctx) {
   (void)user_ctx;
 
@@ -264,22 +308,47 @@ void cores3_app_main(void) {
     return;
   }
 
+  if (app_hooks.init_hook != NULL) {
+    err = app_hooks.init_hook(&app.pmic, app_hooks.user_ctx);
+    if (err != 0) {
+      printf("Failed to run custom PMIC init hook: %ld\n", (long)err);
+      cores3_app_cleanup();
+      return;
+    }
+  }
+
   err = cores3_app_refresh_status_bar();
   if (err != 0) {
     cores3_app_cleanup();
     return;
   }
 
+  TickType_t next_pmic_refresh_tick = 0U;
+  if (app_hooks.periodic_hook != NULL) {
+    next_pmic_refresh_tick = xTaskGetTickCount() + CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS;
+  }
+
   while (1) {
-    uint32_t pending_notifications = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    TickType_t wait_ticks = portMAX_DELAY;
+    if (app_hooks.periodic_hook != NULL) {
+      TickType_t now = xTaskGetTickCount();
+      wait_ticks = cores3_app_tick_deadline_reached(now, next_pmic_refresh_tick)
+                       ? 0U
+                       : (next_pmic_refresh_tick - now);
+    }
+
+    uint32_t pending_notifications = ulTaskNotifyTake(pdTRUE, wait_ticks);
     while (pending_notifications > 0U) {
       (void)cores3_app_refresh_status_bar();
       cores3_app_process_touch();
+      cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick);
       pending_notifications--;
       if (pending_notifications == 0U) {
         pending_notifications = ulTaskNotifyTake(pdTRUE, 0U);
       }
     }
+
+    cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick);
   }
 }
 

@@ -5,6 +5,7 @@
 
 static const int32_t CORES3_BOARD_SYS_I2C_SDA = 12;
 static const int32_t CORES3_BOARD_SYS_I2C_SCL = 11;
+static const int32_t CORES3_BOARD_I2C_INT = 21;
 static const int32_t CORES3_BOARD_LCD_SPI_MOSI = 37;
 static const int32_t CORES3_BOARD_LCD_SPI_SCK = 36;
 static const int32_t CORES3_BOARD_LCD_SPI_CS = 3;

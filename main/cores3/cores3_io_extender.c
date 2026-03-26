@@ -1,4 +1,5 @@
 #include "cores3_io_extender.h"
+#include "cores3_board_constants.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -7,8 +8,6 @@
 
 #include <driver/gpio.h>
 #include <esp_err.h>
-
-static const int CORES3_I2C_INT_PIN = 21;
 
 static ii2c_device_handle_t aw9523b_device_from_context(void *context) {
   return (ii2c_device_handle_t)context;
@@ -90,7 +89,7 @@ int32_t cores3_io_extender_host_interrupt_init(TaskHandle_t notify_task) {
   igpio_config_t config;
   igpio_get_default_config(&config);
   config.intr_type = IGPIO_INTR_ANYEDGE;
-  config.io_num = CORES3_I2C_INT_PIN;
+  config.io_num = CORES3_BOARD_I2C_INT;
   config.mode = IGPIO_MODE_INPUT;
   config.pull_mode = IGPIO_PULL_UP;
 
@@ -104,10 +103,10 @@ int32_t cores3_io_extender_host_interrupt_init(TaskHandle_t notify_task) {
     return err;
   }
 
-  (void)gpio_isr_handler_remove((gpio_num_t)CORES3_I2C_INT_PIN);
+  (void)gpio_isr_handler_remove((gpio_num_t)CORES3_BOARD_I2C_INT);
 
   err = gpio_isr_handler_add(
-      (gpio_num_t)CORES3_I2C_INT_PIN, host_gpio_intr_handler, (void *)notify_task);
+      (gpio_num_t)CORES3_BOARD_I2C_INT, host_gpio_intr_handler, (void *)notify_task);
   if (err != ESP_OK) {
     return err;
   }
@@ -116,8 +115,8 @@ int32_t cores3_io_extender_host_interrupt_init(TaskHandle_t notify_task) {
 }
 
 void cores3_io_extender_deinit(aw9523b_t *expander) {
-  (void)gpio_isr_handler_remove((gpio_num_t)CORES3_I2C_INT_PIN);
-  (void)igpio_reset_pin(CORES3_I2C_INT_PIN);
+  (void)gpio_isr_handler_remove((gpio_num_t)CORES3_BOARD_I2C_INT);
+  (void)igpio_reset_pin(CORES3_BOARD_I2C_INT);
 
   if (expander != NULL) {
     expander->transport_context = NULL;

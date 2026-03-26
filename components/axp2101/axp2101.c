@@ -46,6 +46,15 @@ static const uint16_t AXP2101_CONSTANT_CHARGE_CURRENT_TABLE_MA[] = {
     400, 500, 600, 700, 800, 900, 1000, 1200, 1400, 1500,
 };
 
+static const uint16_t AXP2101_INPUT_CURRENT_LIMIT_TABLE_MA[] = {
+    100,
+    500,
+    900,
+    1000,
+    1500,
+    2000,
+};
+
 static bool axp2101_has_write(const axp2101_t *pmic) {
   return pmic != NULL && pmic->transport_write != NULL;
 }
@@ -139,6 +148,20 @@ static int32_t axp2101_precharge_current_decode(uint8_t selector, uint16_t *out_
   }
 
   *out_ma = (uint16_t)selector * 25;
+  return AXP2101_ERR_NONE;
+}
+
+static int32_t axp2101_input_current_limit_decode(uint8_t selector, uint16_t *out_ma) {
+  if (!out_ma) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  if (selector >= sizeof(AXP2101_INPUT_CURRENT_LIMIT_TABLE_MA) /
+                      sizeof(AXP2101_INPUT_CURRENT_LIMIT_TABLE_MA[0])) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  *out_ma = AXP2101_INPUT_CURRENT_LIMIT_TABLE_MA[selector];
   return AXP2101_ERR_NONE;
 }
 
@@ -318,6 +341,49 @@ int32_t axp2101_fuel_gauge_get(axp2101_t *pmic, axp2101_fuel_gauge_t *out) {
   return AXP2101_ERR_NONE;
 }
 
+int32_t axp2101_current_telemetry_get(axp2101_t *pmic, axp2101_current_telemetry_t *out) {
+  if (!out) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  axp2101_status2_t status2 = {0};
+  int32_t err = axp2101_status2_get(pmic, &status2);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  axp2101_charger_current_t charger_current = {0};
+  err = axp2101_charger_current_get(pmic, &charger_current);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  uint16_t input_current_limit_ma = 0;
+  err = axp2101_input_current_limit_get(pmic, &input_current_limit_ma);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  out->status2 = status2;
+  out->input_current_limit_ma = input_current_limit_ma;
+  out->charger_current = charger_current;
+  return AXP2101_ERR_NONE;
+}
+
+int32_t axp2101_input_current_limit_get(axp2101_t *pmic, uint16_t *out_ma) {
+  if (!out_ma) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  uint8_t reg16 = 0;
+  int32_t err = axp2101_reg8_read(pmic, AXP2101_REG_INPUT_CURRENT_LIMIT_CTRL, &reg16);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  return axp2101_input_current_limit_decode(reg16 & AXP2101_INPUT_CURRENT_LIMIT_CTRL_MASK, out_ma);
+}
+
 int32_t axp2101_pmu_common_cfg_get(axp2101_t *pmic, axp2101_pmu_common_cfg_t *out) {
   if (!out) {
     return AXP2101_ERR_INVALID_ARG;
@@ -411,6 +477,56 @@ int32_t axp2101_irq_off_on_level_set(axp2101_t *pmic, const axp2101_irq_off_on_l
                  AXP2101_IRQ_OFF_ON_LEVEL_MASK_ON;
 
   return axp2101_reg8_update_bits(pmic, AXP2101_REG_IRQ_OFF_ON_LEVEL, mask, new_value);
+}
+
+int32_t axp2101_vbus_irq_configure(axp2101_t *pmic, bool insert_enabled, bool remove_enabled) {
+  const uint8_t mask = AXP2101_IRQ_ENABLE1_VINSERT_IRQ_EN | AXP2101_IRQ_ENABLE1_VREMOVE_IRQ_EN;
+  uint8_t new_value = 0;
+
+  if (insert_enabled) {
+    new_value |= AXP2101_IRQ_ENABLE1_VINSERT_IRQ_EN;
+  }
+  if (remove_enabled) {
+    new_value |= AXP2101_IRQ_ENABLE1_VREMOVE_IRQ_EN;
+  }
+
+  return axp2101_reg8_update_bits(pmic, AXP2101_REG_IRQ_ENABLE1, mask, new_value);
+}
+
+int32_t axp2101_vbus_irq_status_get(axp2101_t *pmic,
+                                    bool *out_insert_pending,
+                                    bool *out_remove_pending) {
+  if (out_insert_pending == NULL || out_remove_pending == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  uint8_t reg_value = 0;
+  int32_t err = axp2101_reg8_read(pmic, AXP2101_REG_IRQ_STATUS1, &reg_value);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  *out_insert_pending =
+      (reg_value & AXP2101_IRQ_STATUS1_VINSERT_IRQ) == AXP2101_IRQ_STATUS1_VINSERT_IRQ;
+  *out_remove_pending =
+      (reg_value & AXP2101_IRQ_STATUS1_VREMOVE_IRQ) == AXP2101_IRQ_STATUS1_VREMOVE_IRQ;
+  return AXP2101_ERR_NONE;
+}
+
+int32_t axp2101_vbus_irq_status_clear(axp2101_t *pmic, bool clear_insert, bool clear_remove) {
+  uint8_t clear_bits = 0;
+
+  if (clear_insert) {
+    clear_bits |= AXP2101_IRQ_STATUS1_VINSERT_IRQ;
+  }
+  if (clear_remove) {
+    clear_bits |= AXP2101_IRQ_STATUS1_VREMOVE_IRQ;
+  }
+  if (clear_bits == 0U) {
+    return AXP2101_ERR_NONE;
+  }
+
+  return axp2101_reg8_write(pmic, AXP2101_REG_IRQ_STATUS1, clear_bits);
 }
 
 int32_t axp2101_charger_current_get(axp2101_t *pmic, axp2101_charger_current_t *out) {
