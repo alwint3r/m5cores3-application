@@ -341,6 +341,29 @@ int32_t axp2101_fuel_gauge_get(axp2101_t *pmic, axp2101_fuel_gauge_t *out) {
   return AXP2101_ERR_NONE;
 }
 
+int32_t axp2101_cell_battery_charge_enabled_get(axp2101_t *pmic, bool *out_enabled) {
+  if (!out_enabled) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  uint8_t reg18 = 0;
+  int32_t err = axp2101_reg8_read(pmic, AXP2101_REG_CHARGE_GAUGE_WDT_CTRL, &reg18);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  *out_enabled = (reg18 & AXP2101_CHARGE_GAUGE_WDT_CTRL_CELL_BAT_CHG_EN) ==
+                 AXP2101_CHARGE_GAUGE_WDT_CTRL_CELL_BAT_CHG_EN;
+  return AXP2101_ERR_NONE;
+}
+
+int32_t axp2101_cell_battery_charge_enabled_set(axp2101_t *pmic, bool enabled) {
+  return axp2101_reg8_update_bits(pmic,
+                                  AXP2101_REG_CHARGE_GAUGE_WDT_CTRL,
+                                  AXP2101_CHARGE_GAUGE_WDT_CTRL_CELL_BAT_CHG_EN,
+                                  enabled ? AXP2101_CHARGE_GAUGE_WDT_CTRL_CELL_BAT_CHG_EN : 0);
+}
+
 int32_t axp2101_current_telemetry_get(axp2101_t *pmic, axp2101_current_telemetry_t *out) {
   if (!out) {
     return AXP2101_ERR_INVALID_ARG;

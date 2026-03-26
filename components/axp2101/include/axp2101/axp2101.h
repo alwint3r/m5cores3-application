@@ -235,6 +235,32 @@ int32_t axp2101_fuel_gauge_enable(axp2101_t *pmic);
  */
 int32_t axp2101_fuel_gauge_get(axp2101_t *pmic, axp2101_fuel_gauge_t *out);
 
+/**
+ * @brief Read whether main cell-battery charging is enabled in `REG18H[1]`.
+ *
+ * The AXP2101 SWcharge datasheet describes `REG18H[1]` as the cell-battery
+ * charge-enable bit. This helper exposes that primitive directly so higher
+ * layers do not need to manipulate raw registers.
+ *
+ * @param pmic Caller-owned transport-backed AXP2101 instance.
+ * @param out_enabled Output pointer that receives the decoded enable state.
+ * @return `AXP2101_ERR_NONE` on success, `AXP2101_ERR_INVALID_ARG` when
+ * `out_enabled` is `NULL`, or a transport error.
+ */
+int32_t axp2101_cell_battery_charge_enabled_get(axp2101_t *pmic, bool *out_enabled);
+
+/**
+ * @brief Enable or disable main cell-battery charging through `REG18H[1]`.
+ *
+ * This helper only controls the PMIC's documented charge-enable bit. It does
+ * not implement battery-percentage policy or hysteresis.
+ *
+ * @param pmic Caller-owned transport-backed AXP2101 instance.
+ * @param enabled `true` keeps cell charging allowed; `false` disables it.
+ * @return `AXP2101_ERR_NONE` on success or a transport / validation error.
+ */
+int32_t axp2101_cell_battery_charge_enabled_set(axp2101_t *pmic, bool enabled);
+
 typedef struct axp2101_pmu_common_cfg_data axp2101_pmu_common_cfg_t;
 /** @brief Decoded fields from `AXP2101_REG_PMU_COMMON_CFG`. */
 struct axp2101_pmu_common_cfg_data {

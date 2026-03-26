@@ -149,6 +149,8 @@ extern "C" {
 
 /** @brief Fuel-gauge enable bit in `AXP2101_REG_CHARGE_GAUGE_WDT_CTRL`. */
 #define AXP2101_CHARGE_GAUGE_WDT_CTRL_GAUGE_EN (1 << 3)
+/** @brief Cell-battery charge-enable bit in `AXP2101_REG_CHARGE_GAUGE_WDT_CTRL`. */
+#define AXP2101_CHARGE_GAUGE_WDT_CTRL_CELL_BAT_CHG_EN (1 << 1)
 
 /** @brief Battery-detection enable bit in `AXP2101_REG_BAT_DET_CTRL`. */
 #define AXP2101_BAT_DET_CTRL_BAT_TYPE_DET_EN (1)
