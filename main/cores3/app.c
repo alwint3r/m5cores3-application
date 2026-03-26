@@ -24,7 +24,7 @@
 
 static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
 static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
-static const TickType_t CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
+static const TickType_t CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
 
 static bool cores3_app_power_status_is_charging(axp2101_charging_status_t status) {
   switch (status) {
@@ -42,9 +42,37 @@ static bool cores3_app_power_status_is_charging(axp2101_charging_status_t status
   }
 }
 
-static cores3_gui_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
+static cores3_gui_power_status_t cores3_app_power_status_to_gui(cores3_app_power_status_t status) {
+  switch (status) {
+    case CORES3_APP_POWER_STATUS_CHARGING:
+      return CORES3_GUI_POWER_STATUS_CHARGING;
+    case CORES3_APP_POWER_STATUS_USB_POWER:
+      return CORES3_GUI_POWER_STATUS_USB_POWER;
+    case CORES3_APP_POWER_STATUS_BATTERY:
+      return CORES3_GUI_POWER_STATUS_BATTERY;
+    case CORES3_APP_POWER_STATUS_UNKNOWN:
+    default:
+      return CORES3_GUI_POWER_STATUS_UNKNOWN;
+  }
+}
+
+const char *cores3_app_power_status_to_string(cores3_app_power_status_t status) {
+  switch (status) {
+    case CORES3_APP_POWER_STATUS_CHARGING:
+      return "charging";
+    case CORES3_APP_POWER_STATUS_USB_POWER:
+      return "usb-power";
+    case CORES3_APP_POWER_STATUS_BATTERY:
+      return "battery";
+    case CORES3_APP_POWER_STATUS_UNKNOWN:
+    default:
+      return "unknown";
+  }
+}
+
+static cores3_app_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
   if (pmic == NULL) {
-    return CORES3_GUI_POWER_STATUS_UNKNOWN;
+    return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 
   axp2101_status1_t status1 = {0};
@@ -54,11 +82,11 @@ static cores3_gui_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
              "Failed to read AXP2101 status1 for status bar: %s (%ld)",
              axp2101_err_to_name(err),
              (long)err);
-    return CORES3_GUI_POWER_STATUS_UNKNOWN;
+    return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 
   if (!status1.vbus_good) {
-    return CORES3_GUI_POWER_STATUS_BATTERY;
+    return CORES3_APP_POWER_STATUS_BATTERY;
   }
 
   axp2101_status2_t status2 = {0};
@@ -68,21 +96,22 @@ static cores3_gui_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
              "Failed to read AXP2101 status2 for status bar: %s (%ld)",
              axp2101_err_to_name(err),
              (long)err);
-    return CORES3_GUI_POWER_STATUS_USB_POWER;
+    return CORES3_APP_POWER_STATUS_USB_POWER;
   }
 
   if (cores3_app_power_status_is_charging(status2.charging_status)) {
-    return CORES3_GUI_POWER_STATUS_CHARGING;
+    return CORES3_APP_POWER_STATUS_CHARGING;
   }
 
-  return CORES3_GUI_POWER_STATUS_USB_POWER;
+  return CORES3_APP_POWER_STATUS_USB_POWER;
 }
 
 static struct {
-  cores3_app_pmic_init_hook_t init_hook;
-  cores3_app_pmic_periodic_hook_t periodic_hook;
+  cores3_app_power_mgmt_init_hook_t init_callback;
+  cores3_app_power_mgmt_periodic_hook_t periodic_callback;
+  cores3_app_power_status_hook_t status_callback;
   void *user_ctx;
-} app_hooks = {0};
+} power_hooks = {0};
 
 typedef struct {
   aw9523b_t io_expander;
@@ -93,6 +122,8 @@ typedef struct {
   cores3_gui_app_t gui;
   cores3_board_t board;
   TaskHandle_t task_handle;
+  cores3_app_power_status_t power_status;
+  bool power_status_valid;
   bool board_initialized;
   bool io_expander_initialized;
   bool touch_initialized;
@@ -103,12 +134,34 @@ typedef struct {
 
 static app_t app = {0};
 
-void cores3_app_set_pmic_hooks(cores3_app_pmic_init_hook_t init_hook,
-                               cores3_app_pmic_periodic_hook_t periodic_hook,
-                               void *user_ctx) {
-  app_hooks.init_hook = init_hook;
-  app_hooks.periodic_hook = periodic_hook;
-  app_hooks.user_ctx = user_ctx;
+void cores3_app_configure_power_hooks(const cores3_app_power_hooks_t *hooks) {
+  if (hooks == NULL) {
+    return;
+  }
+
+  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_INIT_CALLBACK) != 0U) {
+    power_hooks.init_callback = hooks->init_callback;
+  }
+
+  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_PERIODIC_CALLBACK) != 0U) {
+    power_hooks.periodic_callback = hooks->periodic_callback;
+  }
+
+  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_STATUS_CALLBACK) != 0U) {
+    power_hooks.status_callback = hooks->status_callback;
+  }
+
+  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_USER_CTX) != 0U) {
+    power_hooks.user_ctx = hooks->user_ctx;
+  }
+}
+
+cores3_app_power_status_t cores3_app_power_status_get(void) {
+  if (!app.power_status_valid) {
+    return CORES3_APP_POWER_STATUS_UNKNOWN;
+  }
+
+  return app.power_status;
 }
 
 int32_t cores3_app_set_main_text_content(const char *text) {
@@ -232,6 +285,15 @@ static int32_t cores3_app_init_board_devices(void) {
 }
 
 static int32_t cores3_app_refresh_status_bar(void) {
+  cores3_app_power_status_t power_status = cores3_app_power_status_read(&app.pmic);
+  bool power_status_changed = !app.power_status_valid || app.power_status != power_status;
+  app.power_status = power_status;
+  app.power_status_valid = true;
+
+  if (power_status_changed && power_hooks.status_callback != NULL) {
+    power_hooks.status_callback(power_status, power_hooks.user_ctx);
+  }
+
   char free_heap_str[64] = {0};
   snprintf(free_heap_str,
            sizeof(free_heap_str),
@@ -239,15 +301,15 @@ static int32_t cores3_app_refresh_status_bar(void) {
            (unsigned long)esp_get_free_heap_size());
 
   return cores3_gui_app_set_status_bar(
-      &app.gui, free_heap_str, false, cores3_app_power_status_read(&app.pmic));
+      &app.gui, free_heap_str, false, cores3_app_power_status_to_gui(power_status));
 }
 
 static bool cores3_app_tick_deadline_reached(TickType_t now, TickType_t deadline) {
   return (int32_t)(now - deadline) >= 0;
 }
 
-static bool cores3_app_run_periodic_pmic_hook_if_due(TickType_t *next_refresh_tick) {
-  if (app_hooks.periodic_hook == NULL || next_refresh_tick == NULL) {
+static bool cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refresh_tick) {
+  if (power_hooks.periodic_callback == NULL || next_refresh_tick == NULL) {
     return false;
   }
 
@@ -256,10 +318,10 @@ static bool cores3_app_run_periodic_pmic_hook_if_due(TickType_t *next_refresh_ti
     return false;
   }
 
-  app_hooks.periodic_hook(&app.pmic, app_hooks.user_ctx);
+  power_hooks.periodic_callback(&app.pmic, power_hooks.user_ctx);
 
   do {
-    *next_refresh_tick += CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS;
+    *next_refresh_tick += CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS;
   } while (cores3_app_tick_deadline_reached(now, *next_refresh_tick));
 
   return true;
@@ -363,10 +425,10 @@ void cores3_app_main(void) {
     return;
   }
 
-  if (app_hooks.init_hook != NULL) {
-    err = app_hooks.init_hook(&app.pmic, app_hooks.user_ctx);
+  if (power_hooks.init_callback != NULL) {
+    err = power_hooks.init_callback(&app.pmic, power_hooks.user_ctx);
     if (err != 0) {
-      printf("Failed to run custom PMIC init hook: %ld\n", (long)err);
+      printf("Failed to run custom power management init hook: %ld\n", (long)err);
       cores3_app_cleanup();
       return;
     }
@@ -378,25 +440,26 @@ void cores3_app_main(void) {
     return;
   }
 
-  TickType_t next_pmic_refresh_tick = 0U;
-  if (app_hooks.periodic_hook != NULL) {
-    next_pmic_refresh_tick = xTaskGetTickCount() + CORES3_APP_PMIC_REFRESH_INTERVAL_TICKS;
+  TickType_t next_power_mgmt_refresh_tick = 0U;
+  if (power_hooks.periodic_callback != NULL) {
+    next_power_mgmt_refresh_tick =
+        xTaskGetTickCount() + CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS;
   }
 
   while (1) {
     TickType_t wait_ticks = portMAX_DELAY;
-    if (app_hooks.periodic_hook != NULL) {
+    if (power_hooks.periodic_callback != NULL) {
       TickType_t now = xTaskGetTickCount();
-      wait_ticks = cores3_app_tick_deadline_reached(now, next_pmic_refresh_tick)
+      wait_ticks = cores3_app_tick_deadline_reached(now, next_power_mgmt_refresh_tick)
                        ? 0U
-                       : (next_pmic_refresh_tick - now);
+                       : (next_power_mgmt_refresh_tick - now);
     }
 
     uint32_t pending_notifications = ulTaskNotifyTake(pdTRUE, wait_ticks);
     while (pending_notifications > 0U) {
       (void)cores3_app_refresh_status_bar();
       cores3_app_process_touch();
-      if (cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick)) {
+      if (cores3_app_run_periodic_power_mgmt_hook_if_due(&next_power_mgmt_refresh_tick)) {
         (void)cores3_app_refresh_status_bar();
       }
       pending_notifications--;
@@ -405,7 +468,7 @@ void cores3_app_main(void) {
       }
     }
 
-    if (cores3_app_run_periodic_pmic_hook_if_due(&next_pmic_refresh_tick)) {
+    if (cores3_app_run_periodic_power_mgmt_hook_if_due(&next_power_mgmt_refresh_tick)) {
       (void)cores3_app_refresh_status_bar();
     }
   }
