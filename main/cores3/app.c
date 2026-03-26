@@ -26,22 +26,6 @@ static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
 static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
 static const TickType_t CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
 
-static bool cores3_app_power_status_is_charging(axp2101_charging_status_t status) {
-  switch (status) {
-    case AXP2101_CHARGING_STATUS_TRI_CHARGE:
-    case AXP2101_CHARGING_STATUS_PRE_CHARGE:
-    case AXP2101_CHARGING_STATUS_CONSTANT_CHARGE:
-    case AXP2101_CHARGING_STATUS_CONSTANT_VOLTAGE:
-      return true;
-
-    case AXP2101_CHARGING_STATUS_CHARGE_DONE:
-    case AXP2101_CHARGING_STATUS_NOT_CHARGING:
-    case AXP2101_CHARGING_STATUS_UNKNOWN:
-    default:
-      return false;
-  }
-}
-
 static cores3_gui_power_status_t cores3_app_power_status_to_gui(cores3_app_power_status_t status) {
   switch (status) {
     case CORES3_APP_POWER_STATUS_CHARGING:
@@ -53,6 +37,21 @@ static cores3_gui_power_status_t cores3_app_power_status_to_gui(cores3_app_power
     case CORES3_APP_POWER_STATUS_UNKNOWN:
     default:
       return CORES3_GUI_POWER_STATUS_UNKNOWN;
+  }
+}
+
+static cores3_app_power_status_t cores3_app_power_status_from_power_mgmt(
+    cores3_power_mgmt_power_status_t status) {
+  switch (status) {
+    case CORES3_POWER_MGMT_POWER_STATUS_CHARGING:
+      return CORES3_APP_POWER_STATUS_CHARGING;
+    case CORES3_POWER_MGMT_POWER_STATUS_USB_POWER:
+      return CORES3_APP_POWER_STATUS_USB_POWER;
+    case CORES3_POWER_MGMT_POWER_STATUS_BATTERY:
+      return CORES3_APP_POWER_STATUS_BATTERY;
+    case CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN:
+    default:
+      return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 }
 
@@ -75,35 +74,17 @@ static cores3_app_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
     return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 
-  axp2101_status1_t status1 = {0};
-  int32_t err = axp2101_status1_get(pmic, &status1);
+  cores3_power_mgmt_power_status_t power_status = CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN;
+  int32_t err = cores3_power_mgmt_power_status_get(pmic, &power_status);
   if (err != AXP2101_ERR_NONE) {
     ESP_LOGW(CORES3_APP_LOG_TAG,
-             "Failed to read AXP2101 status1 for status bar: %s (%ld)",
-             axp2101_err_to_name(err),
+             "Failed to read board power status for status bar: %s (%ld)",
+             cores3_power_mgmt_err_to_name(err),
              (long)err);
     return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 
-  if (!status1.vbus_good) {
-    return CORES3_APP_POWER_STATUS_BATTERY;
-  }
-
-  axp2101_status2_t status2 = {0};
-  err = axp2101_status2_get(pmic, &status2);
-  if (err != AXP2101_ERR_NONE) {
-    ESP_LOGW(CORES3_APP_LOG_TAG,
-             "Failed to read AXP2101 status2 for status bar: %s (%ld)",
-             axp2101_err_to_name(err),
-             (long)err);
-    return CORES3_APP_POWER_STATUS_USB_POWER;
-  }
-
-  if (cores3_app_power_status_is_charging(status2.charging_status)) {
-    return CORES3_APP_POWER_STATUS_CHARGING;
-  }
-
-  return CORES3_APP_POWER_STATUS_USB_POWER;
+  return cores3_app_power_status_from_power_mgmt(power_status);
 }
 
 static struct {

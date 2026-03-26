@@ -6,6 +6,7 @@
 #include <freertos/task.h>
 
 #include "cores3/app.h"
+#include "cores3/cores3_power_mgmt.h"
 
 typedef struct {
   bool initialized;
@@ -72,7 +73,13 @@ static int32_t custom_cores3_app_init(axp2101_t *pmic, void *user_ctx) {
     return AXP2101_ERR_INVALID_ARG;
   }
 
-  int32_t err = AXP2101_ERR_NONE;
+  int32_t err = cores3_power_mgmt_charge_policy_init(pmic);
+  if (err != AXP2101_ERR_NONE) {
+    printf("Failed to initialize charge threshold policy: %s\n",
+           cores3_power_mgmt_err_to_name(err));
+    return err;
+  }
+
   axp2101_status1_t status1 = {0};
   err = axp2101_status1_get(pmic, &status1);
   if (err != AXP2101_ERR_NONE) {
@@ -90,6 +97,8 @@ static void custom_cores3_app_refresh(axp2101_t *pmic, void *user_ctx) {
   if (pmic == NULL || app_ctx == NULL || !app_ctx->initialized) {
     return;
   }
+
+  cores3_power_mgmt_charge_policy_refresh(pmic);
 
   axp2101_status1_t status1 = {0};
   int32_t err = axp2101_status1_get(pmic, &status1);

@@ -11,6 +11,15 @@
 static const uint8_t CORES3_AW9523B_BOOST_EN_PORT = 1;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
 static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
+static const uint8_t CORES3_AXP2101_CHARGE_STOP_PERCENT = 95;
+static const uint8_t CORES3_AXP2101_CHARGE_RESUME_PERCENT = 90;
+
+typedef struct {
+  bool initialized;
+  bool charging_suspended_by_threshold;
+} cores3_charge_policy_state_t;
+
+static cores3_charge_policy_state_t cores3_charge_policy_state = {0};
 
 static ii2c_device_handle_t axp2101_device_from_context(void *context) {
   return (ii2c_device_handle_t)context;
@@ -57,6 +66,20 @@ const char *cores3_power_mgmt_err_to_name(int32_t err) {
   return ii2c_err_to_name(err);
 }
 
+const char *cores3_power_mgmt_power_status_to_string(cores3_power_mgmt_power_status_t status) {
+  switch (status) {
+    case CORES3_POWER_MGMT_POWER_STATUS_CHARGING:
+      return "charging";
+    case CORES3_POWER_MGMT_POWER_STATUS_USB_POWER:
+      return "usb-power";
+    case CORES3_POWER_MGMT_POWER_STATUS_BATTERY:
+      return "battery";
+    case CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN:
+    default:
+      return "unknown";
+  }
+}
+
 const char *axp2101_charging_status_to_string(axp2101_charging_status_t status) {
   switch (status) {
     case AXP2101_CHARGING_STATUS_TRI_CHARGE:
@@ -76,6 +99,21 @@ const char *axp2101_charging_status_to_string(axp2101_charging_status_t status) 
   }
 
   return "unknown";
+}
+
+static bool axp2101_charging_status_is_active(axp2101_charging_status_t status) {
+  switch (status) {
+    case AXP2101_CHARGING_STATUS_TRI_CHARGE:
+    case AXP2101_CHARGING_STATUS_PRE_CHARGE:
+    case AXP2101_CHARGING_STATUS_CONSTANT_CHARGE:
+    case AXP2101_CHARGING_STATUS_CONSTANT_VOLTAGE:
+      return true;
+    case AXP2101_CHARGING_STATUS_CHARGE_DONE:
+    case AXP2101_CHARGING_STATUS_NOT_CHARGING:
+    case AXP2101_CHARGING_STATUS_UNKNOWN:
+    default:
+      return false;
+  }
 }
 
 static const char *axp2101_battery_current_direction_to_string(
@@ -112,6 +150,106 @@ static void log_axp2101_current_telemetry(axp2101_t *pmic) {
       telemetry.charger_current.constant_charge_current_ma,
       telemetry.charger_current.termination_current_ma,
       telemetry.charger_current.termination_enabled ? "enabled" : "disabled");
+}
+
+static int32_t configure_axp2101_fuel_gauge(axp2101_t *pmic) {
+  int32_t err = axp2101_fuel_gauge_enable(pmic);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  axp2101_fuel_gauge_t fuel_gauge = {0};
+  err = axp2101_fuel_gauge_get(pmic, &fuel_gauge);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (!fuel_gauge.fuel_gauge_enabled || !fuel_gauge.battery_detection_enabled) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  puts("AXP2101 fuel gauge enabled");
+  return AXP2101_ERR_NONE;
+}
+
+static int32_t cores3_power_mgmt_charge_enable_set(axp2101_t *pmic,
+                                                   bool enabled,
+                                                   uint8_t battery_percent,
+                                                   const char *reason) {
+  bool current_enabled = false;
+  int32_t err = axp2101_cell_battery_charge_enabled_get(pmic, &current_enabled);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (current_enabled == enabled) {
+    return AXP2101_ERR_NONE;
+  }
+
+  err = axp2101_cell_battery_charge_enabled_set(pmic, enabled);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  bool readback_enabled = false;
+  err = axp2101_cell_battery_charge_enabled_get(pmic, &readback_enabled);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (readback_enabled != enabled) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  printf("AXP2101 charging %s by threshold policy at %u%% (%s)\n",
+         enabled ? "enabled" : "disabled",
+         (unsigned)battery_percent,
+         reason);
+  return AXP2101_ERR_NONE;
+}
+
+static int32_t cores3_power_mgmt_charge_policy_apply(axp2101_t *pmic,
+                                                     const axp2101_fuel_gauge_t *fuel_gauge) {
+  if (pmic == NULL || fuel_gauge == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  if (!fuel_gauge->battery_present) {
+    int32_t err =
+        cores3_power_mgmt_charge_enable_set(pmic, true, 0, "battery absent; restoring default");
+    if (err != AXP2101_ERR_NONE) {
+      return err;
+    }
+
+    cores3_charge_policy_state.charging_suspended_by_threshold = false;
+    return AXP2101_ERR_NONE;
+  }
+
+  if (!fuel_gauge->battery_percent_valid) {
+    return AXP2101_ERR_NONE;
+  }
+
+  bool suspend_by_threshold = cores3_charge_policy_state.charging_suspended_by_threshold;
+  if (suspend_by_threshold) {
+    if (fuel_gauge->battery_percent <= CORES3_AXP2101_CHARGE_RESUME_PERCENT) {
+      suspend_by_threshold = false;
+    }
+  } else if (fuel_gauge->battery_percent >= CORES3_AXP2101_CHARGE_STOP_PERCENT) {
+    suspend_by_threshold = true;
+  }
+
+  int32_t err = cores3_power_mgmt_charge_enable_set(
+      pmic,
+      !suspend_by_threshold,
+      fuel_gauge->battery_percent,
+      suspend_by_threshold ? "battery at or above stop threshold"
+                           : "battery at or below resume threshold");
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  cores3_charge_policy_state.charging_suspended_by_threshold = suspend_by_threshold;
+  return AXP2101_ERR_NONE;
 }
 
 static int32_t configure_aw9523b_boost_enable(aw9523b_t *expander) {
@@ -380,7 +518,97 @@ static int32_t apply_cores3_axp2101_startup(axp2101_t *pmic) {
     return err;
   }
 
+  err = configure_axp2101_fuel_gauge(pmic);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
   log_axp2101_current_telemetry(pmic);
+  return AXP2101_ERR_NONE;
+}
+
+int32_t cores3_power_mgmt_charge_policy_init(axp2101_t *pmic) {
+  if (pmic == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  int32_t err = axp2101_fuel_gauge_enable(pmic);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  cores3_charge_policy_state.initialized = true;
+  cores3_charge_policy_state.charging_suspended_by_threshold = false;
+
+  axp2101_fuel_gauge_t fuel_gauge = {0};
+  err = axp2101_fuel_gauge_get(pmic, &fuel_gauge);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  err = cores3_power_mgmt_charge_policy_apply(pmic, &fuel_gauge);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  printf("AXP2101 charge threshold policy armed: stop >= %u%%, resume <= %u%%\n",
+         (unsigned)CORES3_AXP2101_CHARGE_STOP_PERCENT,
+         (unsigned)CORES3_AXP2101_CHARGE_RESUME_PERCENT);
+  return AXP2101_ERR_NONE;
+}
+
+void cores3_power_mgmt_charge_policy_refresh(axp2101_t *pmic) {
+  if (pmic == NULL || !cores3_charge_policy_state.initialized) {
+    return;
+  }
+
+  axp2101_fuel_gauge_t fuel_gauge = {0};
+  int32_t err = axp2101_fuel_gauge_get(pmic, &fuel_gauge);
+  if (err != AXP2101_ERR_NONE) {
+    printf("AXP2101 charge threshold policy refresh failed: %s\n",
+           cores3_power_mgmt_err_to_name(err));
+    return;
+  }
+
+  err = cores3_power_mgmt_charge_policy_apply(pmic, &fuel_gauge);
+  if (err != AXP2101_ERR_NONE) {
+    printf("AXP2101 charge threshold policy apply failed: %s\n",
+           cores3_power_mgmt_err_to_name(err));
+  }
+}
+
+int32_t cores3_power_mgmt_power_status_get(axp2101_t *pmic,
+                                           cores3_power_mgmt_power_status_t *out_status) {
+  if (pmic == NULL || out_status == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  axp2101_status1_t status1 = {0};
+  int32_t err = axp2101_status1_get(pmic, &status1);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (!status1.vbus_good) {
+    *out_status = CORES3_POWER_MGMT_POWER_STATUS_BATTERY;
+    return AXP2101_ERR_NONE;
+  }
+
+  if (cores3_charge_policy_state.initialized &&
+      cores3_charge_policy_state.charging_suspended_by_threshold) {
+    *out_status = CORES3_POWER_MGMT_POWER_STATUS_USB_POWER;
+    return AXP2101_ERR_NONE;
+  }
+
+  axp2101_status2_t status2 = {0};
+  err = axp2101_status2_get(pmic, &status2);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  *out_status = axp2101_charging_status_is_active(status2.charging_status)
+                    ? CORES3_POWER_MGMT_POWER_STATUS_CHARGING
+                    : CORES3_POWER_MGMT_POWER_STATUS_USB_POWER;
   return AXP2101_ERR_NONE;
 }
 
