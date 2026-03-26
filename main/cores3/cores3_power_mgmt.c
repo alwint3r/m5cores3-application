@@ -11,6 +11,8 @@
 static const uint8_t CORES3_AW9523B_BOOST_EN_PORT = 1;
 static const uint8_t CORES3_AW9523B_BOOST_EN_PIN = 7;
 static const uint16_t CORES3_AXP2101_DCDC1_LCD_PWR_MV = 3300;
+static const uint16_t CORES3_AXP2101_DLDO1_LCD_BACKLIGHT_NORMAL_MV = 3300;
+static const uint16_t CORES3_AXP2101_DLDO1_LCD_BACKLIGHT_DIM_MV = 2500;
 static const uint8_t CORES3_AXP2101_CHARGE_STOP_PERCENT = 95;
 static const uint8_t CORES3_AXP2101_CHARGE_RESUME_PERCENT = 90;
 
@@ -238,12 +240,12 @@ static int32_t cores3_power_mgmt_charge_policy_apply(axp2101_t *pmic,
     suspend_by_threshold = true;
   }
 
-  int32_t err = cores3_power_mgmt_charge_enable_set(
-      pmic,
-      !suspend_by_threshold,
-      fuel_gauge->battery_percent,
-      suspend_by_threshold ? "battery at or above stop threshold"
-                           : "battery at or below resume threshold");
+  int32_t err = cores3_power_mgmt_charge_enable_set(pmic,
+                                                    !suspend_by_threshold,
+                                                    fuel_gauge->battery_percent,
+                                                    suspend_by_threshold
+                                                        ? "battery at or above stop threshold"
+                                                        : "battery at or below resume threshold");
   if (err != AXP2101_ERR_NONE) {
     return err;
   }
@@ -323,10 +325,16 @@ static int32_t configure_axp2101_ldos(axp2101_t *pmic) {
     return err;
   }
 
+  err = axp2101_dldo1_voltage_set(pmic, CORES3_AXP2101_DLDO1_LCD_BACKLIGHT_NORMAL_MV);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
   uint16_t aldo1_mv = 0;
   uint16_t aldo2_mv = 0;
   uint16_t aldo3_mv = 0;
   uint16_t aldo4_mv = 0;
+  uint16_t dldo1_mv = 0;
 
   err = axp2101_aldo1_voltage_get(pmic, &aldo1_mv);
   if (err != AXP2101_ERR_NONE) {
@@ -348,11 +356,67 @@ static int32_t configure_axp2101_ldos(axp2101_t *pmic) {
     return err;
   }
 
-  if (aldo1_mv != 1800 || aldo2_mv != 3300 || aldo3_mv != 3300 || aldo4_mv != 3300) {
+  err = axp2101_dldo1_voltage_get(pmic, &dldo1_mv);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (aldo1_mv != 1800 || aldo2_mv != 3300 || aldo3_mv != 3300 || aldo4_mv != 3300 ||
+      dldo1_mv != CORES3_AXP2101_DLDO1_LCD_BACKLIGHT_NORMAL_MV) {
     return AXP2101_ERR_INVALID_STATE;
   }
 
-  puts("AXP2101 LDO rails configured");
+  printf("AXP2101 LDO rails configured (LCD backlight=%u mV)\n", dldo1_mv);
+  return AXP2101_ERR_NONE;
+}
+
+int32_t cores3_power_mgmt_lcd_backlight_dim_set(axp2101_t *pmic, bool dimmed) {
+  if (pmic == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  axp2101_ldo_ctrl0_t ldo_state = {0};
+  int32_t err = axp2101_ldo_ctrl0_get(pmic, &ldo_state);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (!ldo_state.dldo1_en) {
+    err = axp2101_ldo_ctrl0_enable(pmic, AXP2101_LDO_CTRL0_EN_DLDO1);
+    if (err != AXP2101_ERR_NONE) {
+      return err;
+    }
+  }
+
+  const uint16_t target_mv = dimmed ? CORES3_AXP2101_DLDO1_LCD_BACKLIGHT_DIM_MV
+                                    : CORES3_AXP2101_DLDO1_LCD_BACKLIGHT_NORMAL_MV;
+  uint16_t current_mv = 0;
+  err = axp2101_dldo1_voltage_get(pmic, &current_mv);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (current_mv == target_mv) {
+    return AXP2101_ERR_NONE;
+  }
+
+  err = axp2101_dldo1_voltage_set(pmic, target_mv);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  uint16_t readback_mv = 0;
+  err = axp2101_dldo1_voltage_get(pmic, &readback_mv);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (readback_mv != target_mv) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  printf(
+      "AXP2101 LCD backlight rail set to %u mV (%s)\n", readback_mv, dimmed ? "dimmed" : "normal");
   return AXP2101_ERR_NONE;
 }
 

@@ -25,6 +25,7 @@
 static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
 static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
 static const TickType_t CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
+static const TickType_t CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS = pdMS_TO_TICKS(15000);
 
 static cores3_gui_power_status_t cores3_app_power_status_to_gui(cores3_app_power_status_t status) {
   switch (status) {
@@ -111,6 +112,9 @@ typedef struct {
   bool display_initialized;
   bool surface_initialized;
   bool gui_initialized;
+  bool display_power_save_enabled;
+  cores3_app_display_power_save_override_t display_power_save_override;
+  TickType_t last_user_activity_tick;
 } app_t;
 
 static app_t app = {0};
@@ -143,6 +147,36 @@ cores3_app_power_status_t cores3_app_power_status_get(void) {
   }
 
   return app.power_status;
+}
+
+int32_t cores3_app_display_power_save_override_set(
+    cores3_app_display_power_save_override_t override_mode) {
+  switch (override_mode) {
+    case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_AUTO:
+    case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED:
+    case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED:
+      break;
+
+    default:
+      return AXP2101_ERR_INVALID_ARG;
+  }
+
+  app.display_power_save_override = override_mode;
+  app.last_user_activity_tick = xTaskGetTickCount();
+
+  if (app.task_handle != NULL) {
+    xTaskNotifyGive(app.task_handle);
+  }
+
+  return AXP2101_ERR_NONE;
+}
+
+cores3_app_display_power_save_override_t cores3_app_display_power_save_override_get(void) {
+  return app.display_power_save_override;
+}
+
+bool cores3_app_display_power_save_enabled_get(void) {
+  return app.display_power_save_enabled;
 }
 
 int32_t cores3_app_set_main_text_content(const char *text) {
@@ -289,6 +323,128 @@ static bool cores3_app_tick_deadline_reached(TickType_t now, TickType_t deadline
   return (int32_t)(now - deadline) >= 0;
 }
 
+static bool cores3_app_display_power_save_allowed(void) {
+  return app.power_status_valid && app.power_status == CORES3_APP_POWER_STATUS_BATTERY;
+}
+
+static bool cores3_app_display_power_save_forced_enabled(void) {
+  return app.display_power_save_override == CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED;
+}
+
+static bool cores3_app_display_power_save_forced_disabled(void) {
+  return app.display_power_save_override == CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED;
+}
+
+static int32_t cores3_app_display_power_save_set(bool enabled) {
+  if (!app.display_initialized) {
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
+  if (app.display_power_save_enabled == enabled) {
+    return ILI9342_ERR_NONE;
+  }
+
+  int32_t err = ILI9342_ERR_NONE;
+  if (enabled) {
+    err = cores3_power_mgmt_lcd_backlight_dim_set(&app.pmic, true);
+    if (err != AXP2101_ERR_NONE) {
+      return err;
+    }
+
+    err = cores3_display_power_save_set(&app.display, true);
+    if (err != ILI9342_ERR_NONE) {
+      (void)cores3_power_mgmt_lcd_backlight_dim_set(&app.pmic, false);
+      return err;
+    }
+  } else {
+    err = cores3_display_power_save_set(&app.display, false);
+    if (err != ILI9342_ERR_NONE) {
+      return err;
+    }
+
+    err = cores3_power_mgmt_lcd_backlight_dim_set(&app.pmic, false);
+    if (err != AXP2101_ERR_NONE) {
+      (void)cores3_display_power_save_set(&app.display, true);
+      return err;
+    }
+  }
+
+  app.display_power_save_enabled = enabled;
+  ESP_LOGI(CORES3_APP_LOG_TAG, "Display power-save %s", enabled ? "enabled" : "disabled");
+  return ILI9342_ERR_NONE;
+}
+
+static void cores3_app_note_user_activity(void) {
+  app.last_user_activity_tick = xTaskGetTickCount();
+
+  if (!app.display_power_save_enabled || cores3_app_display_power_save_forced_enabled()) {
+    return;
+  }
+
+  int32_t err = cores3_app_display_power_save_set(false);
+  if (err != ILI9342_ERR_NONE) {
+    ESP_LOGW(CORES3_APP_LOG_TAG, "Failed to restore display after touch: %ld", (long)err);
+  }
+}
+
+static void cores3_app_run_display_idle_policy(void) {
+  if (!app.display_initialized) {
+    return;
+  }
+
+  TickType_t now = xTaskGetTickCount();
+  if (cores3_app_display_power_save_forced_disabled()) {
+    app.last_user_activity_tick = now;
+    if (app.display_power_save_enabled) {
+      int32_t err = cores3_app_display_power_save_set(false);
+      if (err != ILI9342_ERR_NONE) {
+        ESP_LOGW(CORES3_APP_LOG_TAG,
+                 "Failed to disable forced-off display power-save mode: %ld",
+                 (long)err);
+      }
+    }
+    return;
+  }
+
+  if (cores3_app_display_power_save_forced_enabled()) {
+    if (!app.display_power_save_enabled) {
+      int32_t err = cores3_app_display_power_save_set(true);
+      if (err != ILI9342_ERR_NONE) {
+        ESP_LOGW(
+            CORES3_APP_LOG_TAG, "Failed to enable forced display power-save mode: %ld", (long)err);
+      }
+    }
+    return;
+  }
+
+  if (!cores3_app_display_power_save_allowed()) {
+    app.last_user_activity_tick = now;
+    if (app.display_power_save_enabled) {
+      int32_t err = cores3_app_display_power_save_set(false);
+      if (err != ILI9342_ERR_NONE) {
+        ESP_LOGW(CORES3_APP_LOG_TAG,
+                 "Failed to disable display power-save outside battery mode: %ld",
+                 (long)err);
+      }
+    }
+    return;
+  }
+
+  if (app.display_power_save_enabled) {
+    return;
+  }
+
+  TickType_t dim_deadline = app.last_user_activity_tick + CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS;
+  if (!cores3_app_tick_deadline_reached(now, dim_deadline)) {
+    return;
+  }
+
+  int32_t err = cores3_app_display_power_save_set(true);
+  if (err != ILI9342_ERR_NONE) {
+    ESP_LOGW(CORES3_APP_LOG_TAG, "Failed to enter display power-save mode: %ld", (long)err);
+  }
+}
+
 static bool cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refresh_tick) {
   if (power_hooks.periodic_callback == NULL || next_refresh_tick == NULL) {
     return false;
@@ -369,6 +525,7 @@ static void cores3_app_process_touch(void) {
 
     switch (point->event) {
       case FT6X36_TOUCH_EVENT_PRESS_DOWN:
+        cores3_app_note_user_activity();
         (void)cores3_gui_app_handle_touch(&app.gui, touch_x, touch_y, point->event);
         break;
 
@@ -397,6 +554,7 @@ void cores3_app_main(void) {
     return;
   }
   app.gui_initialized = true;
+  app.last_user_activity_tick = xTaskGetTickCount();
 
   cores3_gui_app_set_event_callback(&app.gui, cores3_app_handle_gui_event, NULL);
 
@@ -443,6 +601,7 @@ void cores3_app_main(void) {
       if (cores3_app_run_periodic_power_mgmt_hook_if_due(&next_power_mgmt_refresh_tick)) {
         (void)cores3_app_refresh_status_bar();
       }
+      cores3_app_run_display_idle_policy();
       pending_notifications--;
       if (pending_notifications == 0U) {
         pending_notifications = ulTaskNotifyTake(pdTRUE, 0U);
@@ -452,6 +611,8 @@ void cores3_app_main(void) {
     if (cores3_app_run_periodic_power_mgmt_hook_if_due(&next_power_mgmt_refresh_tick)) {
       (void)cores3_app_refresh_status_bar();
     }
+
+    cores3_app_run_display_idle_policy();
   }
 }
 

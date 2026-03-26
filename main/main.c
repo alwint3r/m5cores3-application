@@ -22,6 +22,7 @@ static const char *custom_cores3_app_vbus_state_to_string(bool vbus_good) {
 }
 
 static int32_t custom_cores3_app_update_vbus_main_text(bool vbus_good) {
+#if 0
   char main_text[64] = {0};
   int written = snprintf(main_text,
                          sizeof(main_text),
@@ -32,6 +33,10 @@ static int32_t custom_cores3_app_update_vbus_main_text(bool vbus_good) {
   }
 
   return cores3_app_set_main_text_content(main_text);
+#else
+  (void)vbus_good;
+  return 0;
+#endif
 }
 
 static void custom_cores3_app_apply_vbus_state(custom_cores3_app_context_t *app_ctx,

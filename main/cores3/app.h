@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include <axp2101/axp2101.h>
@@ -12,6 +13,12 @@ typedef enum {
   CORES3_APP_POWER_STATUS_USB_POWER,
   CORES3_APP_POWER_STATUS_BATTERY,
 } cores3_app_power_status_t;
+
+typedef enum {
+  CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_AUTO = 0,
+  CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED,
+  CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED,
+} cores3_app_display_power_save_override_t;
 
 typedef int32_t (*cores3_app_power_mgmt_init_hook_t)(axp2101_t *pmic, void *user_ctx);
 typedef void (*cores3_app_power_mgmt_periodic_hook_t)(axp2101_t *pmic, void *user_ctx);
@@ -37,6 +44,10 @@ typedef struct {
 void cores3_app_configure_power_hooks(const cores3_app_power_hooks_t *hooks);
 cores3_app_power_status_t cores3_app_power_status_get(void);
 const char *cores3_app_power_status_to_string(cores3_app_power_status_t status);
+int32_t cores3_app_display_power_save_override_set(
+    cores3_app_display_power_save_override_t override_mode);
+cores3_app_display_power_save_override_t cores3_app_display_power_save_override_get(void);
+bool cores3_app_display_power_save_enabled_get(void);
 int32_t cores3_app_set_main_text_content(const char *text);
 void cores3_app_main(void);
 void cores3_app_task(void *task_context);

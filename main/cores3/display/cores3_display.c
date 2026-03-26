@@ -201,6 +201,30 @@ ili9342_t *cores3_display_panel(cores3_display_t *display) {
   return &display->panel;
 }
 
+int32_t cores3_display_power_save_set(cores3_display_t *display, bool enabled) {
+  if (display == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  if (display->spi_device == NULL) {
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
+  if (display->power_save_enabled == enabled) {
+    return ILI9342_ERR_NONE;
+  }
+
+  int32_t err =
+      enabled ? ili9342_idle_mode_on(&display->panel) : ili9342_idle_mode_off(&display->panel);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  display->power_save_enabled = enabled;
+  puts(enabled ? "LCD panel power-save mode enabled" : "LCD panel power-save mode disabled");
+  return ILI9342_ERR_NONE;
+}
+
 uint16_t cores3_display_width(void) {
   return LCD_WIDTH;
 }
