@@ -559,17 +559,20 @@ void cores3_app_main(void) {
   memset(&app, 0, sizeof(app));
   app.task_handle = xTaskGetCurrentTaskHandle();
   if (app.task_handle == NULL) {
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to get current task handle");
     return;
   }
 
   int32_t err = cores3_app_init_board_devices();
   if (err != 0) {
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to initialize board devices: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }
 
   err = cores3_gui_app_init(&app.gui, &app.surface);
   if (err != 0) {
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to initialize GUI: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }
@@ -580,6 +583,7 @@ void cores3_app_main(void) {
 
   err = cores3_gui_app_set_main_text_content(&app.gui, CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT);
   if (err != 0) {
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to set main text content: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }
@@ -587,7 +591,7 @@ void cores3_app_main(void) {
   if (power_hooks.init_callback != NULL) {
     err = power_hooks.init_callback(&app.pmic, power_hooks.user_ctx);
     if (err != 0) {
-      printf("Failed to run custom power management init hook: %ld\n", (long)err);
+      ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to run power management init hook: %ld", (long)err);
       cores3_app_cleanup();
       return;
     }
@@ -595,6 +599,7 @@ void cores3_app_main(void) {
 
   err = cores3_app_refresh_status_bar();
   if (err != 0) {
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to refresh status bar: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }

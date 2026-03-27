@@ -1,4 +1,4 @@
-#include "display/cores3_display.h"
+#include "cores3_display.h"
 
 #include <stdio.h>
 #include <string.h>

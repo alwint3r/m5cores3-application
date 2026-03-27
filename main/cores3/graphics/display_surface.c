@@ -180,13 +180,8 @@ int32_t graphics_fill_rect(display_surface_t *surface,
                            uint16_t x1,
                            uint16_t y1,
                            uint16_t color) {
-  int32_t err = display_surface_require_owner_task(surface);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  if (surface->panel == NULL || surface->row_buffer == NULL || x1 < x0 || y1 < y0 ||
-      x1 >= surface->width || y1 >= surface->height) {
+  if (surface == NULL || surface->panel == NULL || surface->row_buffer == NULL || x1 < x0 ||
+      y1 < y0 || x1 >= surface->width || y1 >= surface->height) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
@@ -198,7 +193,7 @@ int32_t graphics_fill_rect(display_surface_t *surface,
 
   graphics_fill_color_span(surface->row_buffer, row_pixels, color);
 
-  err = ili9342_address_window_set(surface->panel, x0, y0, x1, y1);
+  int32_t err = ili9342_address_window_set(surface->panel, x0, y0, x1, y1);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
@@ -220,12 +215,7 @@ int32_t graphics_fill_rect_clipped(display_surface_t *surface,
                                    int32_t x1,
                                    int32_t y1,
                                    uint16_t color) {
-  int32_t err = display_surface_require_owner_task(surface);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
-  if (surface->panel == NULL || surface->row_buffer == NULL) {
+  if (surface == NULL || surface->panel == NULL || surface->row_buffer == NULL) {
     return ILI9342_ERR_INVALID_ARG;
   }
 

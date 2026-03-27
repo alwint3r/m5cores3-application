@@ -396,6 +396,12 @@ int32_t cores3_gui_app_init(cores3_gui_app_t *gui, display_surface_t *surface) {
     return ILI9342_ERR_INVALID_STATE;
   }
 
+  gui->text_content_mutex = xSemaphoreCreateMutex();
+  if (gui->text_content_mutex == NULL) {
+    memset(gui, 0, sizeof(*gui));
+    return ILI9342_ERR_NO_MEM;
+  }
+
   err = cores3_gui_load_font(&gui->center_font, open_sans_regular_32, open_sans_regular_32_len);
   if (err != BMF_STATUS_OK) {
     cores3_gui_app_deinit(gui);
@@ -424,17 +430,29 @@ void cores3_gui_app_deinit(cores3_gui_app_t *gui) {
     return;
   }
 
+  if (gui->text_content_mutex != NULL) {
+    vSemaphoreDelete(gui->text_content_mutex);
+    gui->text_content_mutex = NULL;
+  }
+
   memset(gui, 0, sizeof(*gui));
 }
 
 int32_t cores3_gui_app_set_main_text_content(cores3_gui_app_t *gui, const char *text) {
-  int32_t err = cores3_gui_require_owner_task(gui);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
+  if (gui == NULL || !gui->initialized || gui->text_content_mutex == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  if (xSemaphoreTake(gui->text_content_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    ESP_LOGW(CORES3_GUI_LOG_TAG, "Failed to acquire text content mutex");
+    return ILI9342_ERR_TIMEOUT;
   }
 
   cores3_gui_copy_string(gui->main_text_content, sizeof(gui->main_text_content), text);
-  return cores3_gui_render_main_text_content(gui);
+  int32_t err = cores3_gui_render_main_text_content(gui);
+
+  xSemaphoreGive(gui->text_content_mutex);
+  return err;
 }
 
 int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
@@ -448,6 +466,15 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
     return err;
   }
 
+  if (gui->text_content_mutex == NULL) {
+    return ILI9342_ERR_INVALID_STATE;
+  }
+
+  if (xSemaphoreTake(gui->text_content_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    ESP_LOGW(CORES3_GUI_LOG_TAG, "Failed to acquire mutex for status bar update");
+    return ILI9342_ERR_TIMEOUT;
+  }
+
   char next_status_text[CORES3_GUI_APP_STATUS_TEXT_MAX_LEN] = {0};
   cores3_gui_copy_string(next_status_text, sizeof(next_status_text), text);
 
@@ -457,6 +484,7 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
   bool battery_changed = gui->battery_percent_valid != battery_percent_valid ||
                          (battery_percent_valid && gui->battery_percent != battery_percent);
   if (!text_changed && !wifi_changed && !power_changed && !battery_changed) {
+    xSemaphoreGive(gui->text_content_mutex);
     return ILI9342_ERR_NONE;
   }
 
@@ -469,26 +497,18 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
   err = ILI9342_ERR_NONE;
   if (wifi_changed) {
     err = cores3_gui_render_status_wifi(gui);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
   }
 
-  if (power_changed || battery_changed) {
+  if (err == ILI9342_ERR_NONE && (power_changed || battery_changed)) {
     err = cores3_gui_render_status_power(gui);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
   }
 
-  if (text_changed) {
+  if (err == ILI9342_ERR_NONE && text_changed) {
     err = cores3_gui_render_status_text(gui);
-    if (err != ILI9342_ERR_NONE) {
-      return err;
-    }
   }
 
-  return ILI9342_ERR_NONE;
+  xSemaphoreGive(gui->text_content_mutex);
+  return err;
 }
 
 void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,

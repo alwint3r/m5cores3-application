@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <ft6x36/ft6x36.h>
 
 #include "graphics/bmf_reader.h"
@@ -28,6 +30,7 @@ typedef void (*cores3_gui_app_event_callback_t)(cores3_gui_app_event_t event, vo
 typedef struct {
   display_surface_t *surface;
   TaskHandle_t owner_task;
+  SemaphoreHandle_t text_content_mutex;
   bmf_font_view_t center_font;
   bmf_font_view_t status_font;
   graphics_rect_t main_text_content_rect;

@@ -431,12 +431,9 @@ static int32_t draw_char_array_bounded(display_surface_t *surface,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = display_surface_require_owner_task(surface);
-  if (err != ILI9342_ERR_NONE) {
-    return err;
-  }
-
   int16_t first_line_y = graphics_text_first_baseline_y(font, bounding);
+
+  int32_t err = ILI9342_ERR_NONE;
 
   int16_t pen_x = x;
   int16_t pen_y = y;
