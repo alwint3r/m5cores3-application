@@ -26,4 +26,5 @@ idf_component_register(
 	ili9342
 	esp_timer
 	esp_driver_gpio
+	esp_wifi
 )

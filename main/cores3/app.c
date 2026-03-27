@@ -13,6 +13,7 @@
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 
 #include "cores3_board.h"
 #include "cores3_io_extender.h"
@@ -24,7 +25,7 @@
 
 static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
 static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
-static const TickType_t CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
+static const TickType_t CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
 static const TickType_t CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS = pdMS_TO_TICKS(15000);
 
 static cores3_gui_power_status_t cores3_app_power_status_to_gui(cores3_app_power_status_t status) {
@@ -299,6 +300,12 @@ static int32_t cores3_app_init_board_devices(void) {
   return ILI9342_ERR_NONE;
 }
 
+static bool cores3_app_wifi_connected(void) {
+  wifi_ap_record_t ap_info = {0};
+  esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+  return err == ESP_OK;
+}
+
 static int32_t cores3_app_refresh_status_bar(void) {
   cores3_app_power_status_t power_status = cores3_app_power_status_read(&app.pmic);
   bool power_status_changed = !app.power_status_valid || app.power_status != power_status;
@@ -326,7 +333,7 @@ static int32_t cores3_app_refresh_status_bar(void) {
 
   return cores3_gui_app_set_status_bar(&app.gui,
                                        free_heap_str,
-                                       false,
+                                       cores3_app_wifi_connected(),
                                        cores3_app_power_status_to_gui(power_status),
                                        battery_percent,
                                        battery_percent_valid);
@@ -471,7 +478,7 @@ static bool cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refr
   power_hooks.periodic_callback(&app.pmic, power_hooks.user_ctx);
 
   do {
-    *next_refresh_tick += CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS;
+    *next_refresh_tick += CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS;
   } while (cores3_app_tick_deadline_reached(now, *next_refresh_tick));
 
   return true;
@@ -594,8 +601,7 @@ void cores3_app_main(void) {
 
   TickType_t next_power_mgmt_refresh_tick = 0U;
   if (power_hooks.periodic_callback != NULL) {
-    next_power_mgmt_refresh_tick =
-        xTaskGetTickCount() + CORES3_APP_POWER_MGMT_REFRESH_INTERVAL_TICKS;
+    next_power_mgmt_refresh_tick = xTaskGetTickCount() + CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS;
   }
 
   while (1) {
