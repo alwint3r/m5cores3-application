@@ -16,8 +16,10 @@
 #include "graphics/text_renderer.h"
 
 #define IMG2BITMAP_DECLARE_GRAPHICS_BITMAP_ICON
-#include "graphics/icons/icon_battery_4bpp.h"
-#include "graphics/icons/icon_battery_charging_4bpp.h"
+#include "graphics/icons/icon_battery_full.h"
+#include "graphics/icons/icon_battery_half.h"
+#include "graphics/icons/icon_battery_low.h"
+#include "graphics/icons/icon_battery_charging.h"
 #include "graphics/icons/icon_reboot_4bpp.h"
 #include "graphics/icons/icon_usb_4bpp.h"
 #include "graphics/icons/icon_wifi_connected_4bpp.h"
@@ -201,7 +203,7 @@ static int32_t cores3_gui_render_status_power(cores3_gui_app_t *gui) {
     return err;
   }
 
-  const graphics_bitmap_icon_t *power_icon = &icon_battery;
+  const graphics_bitmap_icon_t *power_icon = &icon_battery_low;
   switch (gui->power_status) {
     case CORES3_GUI_POWER_STATUS_CHARGING:
       power_icon = &icon_battery_charging;
@@ -210,9 +212,21 @@ static int32_t cores3_gui_render_status_power(cores3_gui_app_t *gui) {
       power_icon = &icon_usb;
       break;
     case CORES3_GUI_POWER_STATUS_BATTERY:
+      if (gui->battery_percent_valid) {
+        if (gui->battery_percent >= 67) {
+          power_icon = &icon_battery_full;
+        } else if (gui->battery_percent >= 33) {
+          power_icon = &icon_battery_half;
+        } else {
+          power_icon = &icon_battery_low;
+        }
+      } else {
+        power_icon = &icon_battery_half;
+      }
+      break;
     case CORES3_GUI_POWER_STATUS_UNKNOWN:
     default:
-      power_icon = &icon_battery;
+      power_icon = &icon_battery_low;
       break;
   }
 
@@ -426,7 +440,9 @@ int32_t cores3_gui_app_set_main_text_content(cores3_gui_app_t *gui, const char *
 int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
                                       const char *text,
                                       bool wifi_connected,
-                                      cores3_gui_power_status_t power_status) {
+                                      cores3_gui_power_status_t power_status,
+                                      uint8_t battery_percent,
+                                      bool battery_percent_valid) {
   int32_t err = cores3_gui_require_owner_task(gui);
   if (err != ILI9342_ERR_NONE) {
     return err;
@@ -438,13 +454,17 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
   bool text_changed = strcmp(gui->status_text, next_status_text) != 0;
   bool wifi_changed = gui->wifi_connected != wifi_connected;
   bool power_changed = gui->power_status != power_status;
-  if (!text_changed && !wifi_changed && !power_changed) {
+  bool battery_changed = gui->battery_percent_valid != battery_percent_valid ||
+                         (battery_percent_valid && gui->battery_percent != battery_percent);
+  if (!text_changed && !wifi_changed && !power_changed && !battery_changed) {
     return ILI9342_ERR_NONE;
   }
 
   cores3_gui_copy_string(gui->status_text, sizeof(gui->status_text), next_status_text);
   gui->wifi_connected = wifi_connected;
   gui->power_status = power_status;
+  gui->battery_percent = battery_percent;
+  gui->battery_percent_valid = battery_percent_valid;
 
   err = ILI9342_ERR_NONE;
   if (wifi_changed) {
@@ -454,7 +474,7 @@ int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
     }
   }
 
-  if (power_changed) {
+  if (power_changed || battery_changed) {
     err = cores3_gui_render_status_power(gui);
     if (err != ILI9342_ERR_NONE) {
       return err;

@@ -37,6 +37,8 @@ typedef struct {
   graphics_rect_t wifi_status_rect;
   graphics_rect_t reboot_button_rect;
   cores3_gui_power_status_t power_status;
+  uint8_t battery_percent;
+  bool battery_percent_valid;
   bool wifi_connected;
   char main_text_content[CORES3_GUI_APP_MAIN_TEXT_CONTENT_MAX_LEN];
   char status_text[CORES3_GUI_APP_STATUS_TEXT_MAX_LEN];
@@ -51,7 +53,9 @@ int32_t cores3_gui_app_set_main_text_content(cores3_gui_app_t *gui, const char *
 int32_t cores3_gui_app_set_status_bar(cores3_gui_app_t *gui,
                                       const char *text,
                                       bool wifi_connected,
-                                      cores3_gui_power_status_t power_status);
+                                      cores3_gui_power_status_t power_status,
+                                      uint8_t battery_percent,
+                                      bool battery_percent_valid);
 void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,
                                        cores3_gui_app_event_callback_t callback,
                                        void *user_ctx);

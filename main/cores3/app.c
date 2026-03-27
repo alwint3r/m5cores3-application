@@ -305,6 +305,15 @@ static int32_t cores3_app_refresh_status_bar(void) {
   app.power_status = power_status;
   app.power_status_valid = true;
 
+  axp2101_fuel_gauge_t fuel_gauge = {0};
+  int32_t fuel_err = axp2101_fuel_gauge_get(&app.pmic, &fuel_gauge);
+  uint8_t battery_percent = 0;
+  bool battery_percent_valid = false;
+  if (fuel_err == AXP2101_ERR_NONE && fuel_gauge.battery_percent_valid) {
+    battery_percent = fuel_gauge.battery_percent;
+    battery_percent_valid = true;
+  }
+
   if (power_status_changed && power_hooks.status_callback != NULL) {
     power_hooks.status_callback(power_status, power_hooks.user_ctx);
   }
@@ -315,8 +324,12 @@ static int32_t cores3_app_refresh_status_bar(void) {
            "Free Heap %lu B",
            (unsigned long)esp_get_free_heap_size());
 
-  return cores3_gui_app_set_status_bar(
-      &app.gui, free_heap_str, false, cores3_app_power_status_to_gui(power_status));
+  return cores3_gui_app_set_status_bar(&app.gui,
+                                       free_heap_str,
+                                       false,
+                                       cores3_app_power_status_to_gui(power_status),
+                                       battery_percent,
+                                       battery_percent_valid);
 }
 
 static bool cores3_app_tick_deadline_reached(TickType_t now, TickType_t deadline) {
