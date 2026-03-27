@@ -311,18 +311,18 @@ static int32_t flush_prepared_glyph_run(display_surface_t *surface,
 
 int16_t graphics_text_first_baseline_y(const bmf_font_view_t *font,
                                        const graphics_rect_t *bounding) {
-  int16_t first_line_y = bounding->y0;
+  int32_t first_line_y = (int32_t)bounding->y0;
   if (font->ascent > 0) {
-    first_line_y = (int16_t)(bounding->y0 + font->ascent);
+    first_line_y = (int32_t)bounding->y0 + font->ascent;
   } else if (font->line_height > 0U) {
-    first_line_y = (int16_t)(bounding->y0 + (int16_t)font->line_height - 1);
+    first_line_y = (int32_t)bounding->y0 + (int32_t)font->line_height - 1;
   }
 
   if (first_line_y > bounding->y1) {
     first_line_y = bounding->y1;
   }
 
-  return first_line_y;
+  return (int16_t)first_line_y;
 }
 
 static int32_t clear_text_line(display_surface_t *surface,
@@ -386,10 +386,11 @@ static int32_t wrap_pen_to_next_line(display_surface_t *surface,
   }
 
   *pen_x = bounding->x0;
-  *pen_y = (int16_t)(*pen_y + (int16_t)font->line_height);
-  if (*pen_y > bounding->y1) {
-    *pen_y = first_line_y;
+  int32_t next_y = (int32_t)*pen_y + (int32_t)font->line_height;
+  if (next_y > bounding->y1) {
+    next_y = first_line_y;
   }
+  *pen_y = (int16_t)next_y;
 
   return clear_text_line(surface, font, bounding, *pen_y, background_color);
 }

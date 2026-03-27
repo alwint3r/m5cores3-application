@@ -158,13 +158,12 @@ void graphics_rect_include(graphics_rect_t *dst, const graphics_rect_t *src) {
   }
 }
 
-bool graphics_rect_contains_point(const graphics_rect_t *rect, uint16_t x, uint16_t y) {
+bool graphics_rect_contains_point(const graphics_rect_t *rect, int16_t x, int16_t y) {
   if (rect == NULL) {
     return false;
   }
 
-  return x >= (uint16_t)rect->x0 && x <= (uint16_t)rect->x1 && y >= (uint16_t)rect->y0 &&
-         y <= (uint16_t)rect->y1;
+  return x >= rect->x0 && x <= rect->x1 && y >= rect->y0 && y <= rect->y1;
 }
 
 uint16_t graphics_rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b) {
@@ -215,6 +214,56 @@ int32_t graphics_fill_rect(display_surface_t *surface,
   return ILI9342_ERR_NONE;
 }
 
+int32_t graphics_fill_rect_clipped(display_surface_t *surface,
+                                   int32_t x0,
+                                   int32_t y0,
+                                   int32_t x1,
+                                   int32_t y1,
+                                   uint16_t color) {
+  int32_t err = display_surface_require_owner_task(surface);
+  if (err != ILI9342_ERR_NONE) {
+    return err;
+  }
+
+  if (surface->panel == NULL || surface->row_buffer == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  if (x1 < x0 || y1 < y0) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  int32_t max_x = (int32_t)surface->width - 1;
+  int32_t max_y = (int32_t)surface->height - 1;
+
+  if (x0 > max_x || x1 < 0 || y0 > max_y || y1 < 0) {
+    return ILI9342_ERR_NONE;
+  }
+
+  int32_t clip_x0 = x0 < 0 ? 0 : x0;
+  int32_t clip_y0 = y0 < 0 ? 0 : y0;
+  int32_t clip_x1 = x1 > max_x ? max_x : x1;
+  int32_t clip_y1 = y1 > max_y ? max_y : y1;
+
+  return graphics_fill_rect(
+      surface, (uint16_t)clip_x0, (uint16_t)clip_y0, (uint16_t)clip_x1, (uint16_t)clip_y1, color);
+}
+
+int32_t graphics_fill_rect_from_bounds(display_surface_t *surface,
+                                       const graphics_rect_t *bounds,
+                                       uint16_t color) {
+  if (bounds == NULL) {
+    return ILI9342_ERR_INVALID_ARG;
+  }
+
+  return graphics_fill_rect_clipped(surface,
+                                    (int32_t)bounds->x0,
+                                    (int32_t)bounds->y0,
+                                    (int32_t)bounds->x1,
+                                    (int32_t)bounds->y1,
+                                    color);
+}
+
 int32_t graphics_fill_screen(display_surface_t *surface, uint16_t color) {
   if (surface == NULL || surface->width == 0U || surface->height == 0U) {
     return ILI9342_ERR_INVALID_ARG;
@@ -239,24 +288,24 @@ int32_t graphics_fill_round_rect_r6_top(display_surface_t *surface,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = graphics_fill_rect(surface,
-                                   (uint16_t)bounds->x0,
-                                   (uint16_t)(bounds->y0 + 6),
-                                   (uint16_t)bounds->x1,
-                                   (uint16_t)bounds->y1,
-                                   color);
+  int32_t err = graphics_fill_rect_clipped(surface,
+                                           (int32_t)bounds->x0,
+                                           (int32_t)bounds->y0 + 6,
+                                           (int32_t)bounds->x1,
+                                           (int32_t)bounds->y1,
+                                           color);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
 
-  for (uint16_t dy = 0; dy < 6U; ++dy) {
-    uint16_t dx = inset[dy];
-    err = graphics_fill_rect(surface,
-                             (uint16_t)(bounds->x0 + dx),
-                             (uint16_t)(bounds->y0 + (int16_t)dy),
-                             (uint16_t)(bounds->x1 - (int16_t)dx),
-                             (uint16_t)(bounds->y0 + (int16_t)dy),
-                             color);
+  for (int32_t dy = 0; dy < 6; ++dy) {
+    int32_t dx = (int32_t)inset[dy];
+    err = graphics_fill_rect_clipped(surface,
+                                     (int32_t)bounds->x0 + dx,
+                                     (int32_t)bounds->y0 + dy,
+                                     (int32_t)bounds->x1 - dx,
+                                     (int32_t)bounds->y0 + dy,
+                                     color);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }
@@ -274,34 +323,34 @@ int32_t graphics_fill_round_rect_r6(display_surface_t *surface,
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = graphics_fill_rect(surface,
-                                   (uint16_t)bounds->x0,
-                                   (uint16_t)(bounds->y0 + 6),
-                                   (uint16_t)bounds->x1,
-                                   (uint16_t)(bounds->y1 - 6),
-                                   color);
+  int32_t err = graphics_fill_rect_clipped(surface,
+                                           (int32_t)bounds->x0,
+                                           (int32_t)bounds->y0 + 6,
+                                           (int32_t)bounds->x1,
+                                           (int32_t)bounds->y1 - 6,
+                                           color);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
 
-  for (uint16_t dy = 0; dy < 6U; ++dy) {
-    uint16_t dx = inset[dy];
-    err = graphics_fill_rect(surface,
-                             (uint16_t)(bounds->x0 + dx),
-                             (uint16_t)(bounds->y0 + (int16_t)dy),
-                             (uint16_t)(bounds->x1 - (int16_t)dx),
-                             (uint16_t)(bounds->y0 + (int16_t)dy),
-                             color);
+  for (int32_t dy = 0; dy < 6; ++dy) {
+    int32_t dx = (int32_t)inset[dy];
+    err = graphics_fill_rect_clipped(surface,
+                                     (int32_t)bounds->x0 + dx,
+                                     (int32_t)bounds->y0 + dy,
+                                     (int32_t)bounds->x1 - dx,
+                                     (int32_t)bounds->y0 + dy,
+                                     color);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }
 
-    err = graphics_fill_rect(surface,
-                             (uint16_t)(bounds->x0 + dx),
-                             (uint16_t)(bounds->y1 - (int16_t)dy),
-                             (uint16_t)(bounds->x1 - (int16_t)dx),
-                             (uint16_t)(bounds->y1 - (int16_t)dy),
-                             color);
+    err = graphics_fill_rect_clipped(surface,
+                                     (int32_t)bounds->x0 + dx,
+                                     (int32_t)bounds->y1 - dy,
+                                     (int32_t)bounds->x1 - dx,
+                                     (int32_t)bounds->y1 - dy,
+                                     color);
     if (err != ILI9342_ERR_NONE) {
       return err;
     }

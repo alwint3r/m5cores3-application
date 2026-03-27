@@ -42,7 +42,7 @@ bool graphics_rect_clip_to_bounds(const graphics_rect_t *bounds,
                                   int32_t y1,
                                   graphics_rect_t *clipped);
 void graphics_rect_include(graphics_rect_t *dst, const graphics_rect_t *src);
-bool graphics_rect_contains_point(const graphics_rect_t *rect, uint16_t x, uint16_t y);
+bool graphics_rect_contains_point(const graphics_rect_t *rect, int16_t x, int16_t y);
 
 uint16_t graphics_rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b);
 
@@ -52,6 +52,15 @@ int32_t graphics_fill_rect(display_surface_t *surface,
                            uint16_t x1,
                            uint16_t y1,
                            uint16_t color);
+int32_t graphics_fill_rect_clipped(display_surface_t *surface,
+                                   int32_t x0,
+                                   int32_t y0,
+                                   int32_t x1,
+                                   int32_t y1,
+                                   uint16_t color);
+int32_t graphics_fill_rect_from_bounds(display_surface_t *surface,
+                                       const graphics_rect_t *bounds,
+                                       uint16_t color);
 int32_t graphics_fill_screen(display_surface_t *surface, uint16_t color);
 int32_t graphics_fill_round_rect_r6(display_surface_t *surface,
                                     const graphics_rect_t *bounds,

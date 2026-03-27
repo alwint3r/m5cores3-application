@@ -152,16 +152,7 @@ static void cores3_gui_layout_init(cores3_gui_app_t *gui) {
 static int32_t cores3_gui_fill_rect(display_surface_t *surface,
                                     const graphics_rect_t *rect,
                                     uint16_t color) {
-  if (surface == NULL || rect == NULL) {
-    return ILI9342_ERR_INVALID_ARG;
-  }
-
-  return graphics_fill_rect(surface,
-                            (uint16_t)rect->x0,
-                            (uint16_t)rect->y0,
-                            (uint16_t)rect->x1,
-                            (uint16_t)rect->y1,
-                            color);
+  return graphics_fill_rect_from_bounds(surface, rect, color);
 }
 
 static int32_t cores3_gui_render_status_wifi(cores3_gui_app_t *gui) {
@@ -299,12 +290,8 @@ static int32_t cores3_gui_render_main_text_content(cores3_gui_app_t *gui) {
     return ILI9342_ERR_INVALID_ARG;
   }
 
-  int32_t err = graphics_fill_rect(gui->surface,
-                                   (uint16_t)gui->main_text_content_rect.x0,
-                                   (uint16_t)gui->main_text_content_rect.y0,
-                                   (uint16_t)gui->main_text_content_rect.x1,
-                                   (uint16_t)gui->main_text_content_rect.y1,
-                                   CORES3_GUI_BG_COLOR);
+  int32_t err = graphics_fill_rect_from_bounds(
+      gui->surface, &gui->main_text_content_rect, CORES3_GUI_BG_COLOR);
   if (err != ILI9342_ERR_NONE) {
     return err;
   }
@@ -497,8 +484,8 @@ void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,
 }
 
 int32_t cores3_gui_app_handle_touch(cores3_gui_app_t *gui,
-                                    uint16_t x,
-                                    uint16_t y,
+                                    int16_t x,
+                                    int16_t y,
                                     ft6x36_touch_event_t touch_event) {
   int32_t err = cores3_gui_require_owner_task(gui);
   if (err != ILI9342_ERR_NONE) {

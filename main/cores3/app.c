@@ -223,8 +223,8 @@ static void cores3_app_cleanup(void) {
 
 static bool cores3_app_touch_coordinates_map(uint16_t raw_x,
                                              uint16_t raw_y,
-                                             uint16_t *mapped_x,
-                                             uint16_t *mapped_y) {
+                                             int16_t *mapped_x,
+                                             int16_t *mapped_y) {
   if (mapped_x == NULL || mapped_y == NULL) {
     return false;
   }
@@ -236,8 +236,8 @@ static bool cores3_app_touch_coordinates_map(uint16_t raw_x,
     return false;
   }
 
-  *mapped_x = (uint16_t)((display_width - 1U) - raw_x);
-  *mapped_y = (uint16_t)((display_height - 1U) - raw_y);
+  *mapped_x = (int16_t)((display_width - 1U) - raw_x);
+  *mapped_y = (int16_t)((display_height - 1U) - raw_y);
   return true;
 }
 
@@ -505,16 +505,16 @@ static void cores3_app_process_touch(void) {
     }
 
     ESP_LOGI(CORES3_APP_LOG_TAG,
-             "Touch %u coord (%d, %d), area: %u, weight: %u, event: %u",
+             "Touch %u coord (%u, %u), area: %u, weight: %u, event: %u",
              count,
-             point->x,
-             point->y,
+             (unsigned)point->x,
+             (unsigned)point->y,
              point->area,
              point->weight,
              (uint8_t)point->event);
 
-    uint16_t touch_x = 0;
-    uint16_t touch_y = 0;
+    int16_t touch_x = 0;
+    int16_t touch_y = 0;
     if (!cores3_app_touch_coordinates_map(point->x, point->y, &touch_x, &touch_y)) {
       ESP_LOGW(CORES3_APP_LOG_TAG,
                "Discarding out-of-bounds touch sample (%u, %u)",

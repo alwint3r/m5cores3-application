@@ -56,6 +56,6 @@ void cores3_gui_app_set_event_callback(cores3_gui_app_t *gui,
                                        cores3_gui_app_event_callback_t callback,
                                        void *user_ctx);
 int32_t cores3_gui_app_handle_touch(cores3_gui_app_t *gui,
-                                    uint16_t x,
-                                    uint16_t y,
+                                    int16_t x,
+                                    int16_t y,
                                     ft6x36_touch_event_t touch_event);
