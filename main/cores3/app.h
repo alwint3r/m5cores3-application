@@ -48,6 +48,10 @@ int32_t cores3_app_display_power_save_override_set(
     cores3_app_display_power_save_override_t override_mode);
 cores3_app_display_power_save_override_t cores3_app_display_power_save_override_get(void);
 bool cores3_app_display_power_save_enabled_get(void);
+int32_t cores3_app_lcd_backlight_voltage_set(uint16_t voltage_mv);
+int32_t cores3_app_lcd_backlight_voltage_get(uint16_t *voltage_mv);
+int32_t cores3_app_display_brightness_set(uint8_t brightness_percent);
+int32_t cores3_app_display_brightness_get(uint8_t *brightness_percent);
 int32_t cores3_app_set_main_text_content(const char *text);
 void cores3_app_main(void);
 void cores3_app_task(void *task_context);
