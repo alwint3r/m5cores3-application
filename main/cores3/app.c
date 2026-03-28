@@ -24,55 +24,50 @@
 #include "gui_app.h"
 
 static const char *CORES3_APP_LOG_TAG = "CORES3_APP";
-static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT =
-    "Waiting for events...";
-static const TickType_t CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS =
-    pdMS_TO_TICKS(1000);
-static const TickType_t CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS =
-    pdMS_TO_TICKS(15000);
+static const char *CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT = "Waiting for events...";
+static const TickType_t CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS = pdMS_TO_TICKS(1000);
+static const TickType_t CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS = pdMS_TO_TICKS(15000);
 
-static cores3_gui_power_status_t
-cores3_app_power_status_to_gui(cores3_app_power_status_t status) {
+static cores3_gui_power_status_t cores3_app_power_status_to_gui(cores3_app_power_status_t status) {
   switch (status) {
-  case CORES3_APP_POWER_STATUS_CHARGING:
-    return CORES3_GUI_POWER_STATUS_CHARGING;
-  case CORES3_APP_POWER_STATUS_USB_POWER:
-    return CORES3_GUI_POWER_STATUS_USB_POWER;
-  case CORES3_APP_POWER_STATUS_BATTERY:
-    return CORES3_GUI_POWER_STATUS_BATTERY;
-  case CORES3_APP_POWER_STATUS_UNKNOWN:
-  default:
-    return CORES3_GUI_POWER_STATUS_UNKNOWN;
+    case CORES3_APP_POWER_STATUS_CHARGING:
+      return CORES3_GUI_POWER_STATUS_CHARGING;
+    case CORES3_APP_POWER_STATUS_USB_POWER:
+      return CORES3_GUI_POWER_STATUS_USB_POWER;
+    case CORES3_APP_POWER_STATUS_BATTERY:
+      return CORES3_GUI_POWER_STATUS_BATTERY;
+    case CORES3_APP_POWER_STATUS_UNKNOWN:
+    default:
+      return CORES3_GUI_POWER_STATUS_UNKNOWN;
   }
 }
 
 static cores3_app_power_status_t cores3_app_power_status_from_power_mgmt(
     cores3_power_mgmt_power_status_t status) {
   switch (status) {
-  case CORES3_POWER_MGMT_POWER_STATUS_CHARGING:
-    return CORES3_APP_POWER_STATUS_CHARGING;
-  case CORES3_POWER_MGMT_POWER_STATUS_USB_POWER:
-    return CORES3_APP_POWER_STATUS_USB_POWER;
-  case CORES3_POWER_MGMT_POWER_STATUS_BATTERY:
-    return CORES3_APP_POWER_STATUS_BATTERY;
-  case CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN:
-  default:
-    return CORES3_APP_POWER_STATUS_UNKNOWN;
+    case CORES3_POWER_MGMT_POWER_STATUS_CHARGING:
+      return CORES3_APP_POWER_STATUS_CHARGING;
+    case CORES3_POWER_MGMT_POWER_STATUS_USB_POWER:
+      return CORES3_APP_POWER_STATUS_USB_POWER;
+    case CORES3_POWER_MGMT_POWER_STATUS_BATTERY:
+      return CORES3_APP_POWER_STATUS_BATTERY;
+    case CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN:
+    default:
+      return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 }
 
-const char *
-cores3_app_power_status_to_string(cores3_app_power_status_t status) {
+const char *cores3_app_power_status_to_string(cores3_app_power_status_t status) {
   switch (status) {
-  case CORES3_APP_POWER_STATUS_CHARGING:
-    return "charging";
-  case CORES3_APP_POWER_STATUS_USB_POWER:
-    return "usb-power";
-  case CORES3_APP_POWER_STATUS_BATTERY:
-    return "battery";
-  case CORES3_APP_POWER_STATUS_UNKNOWN:
-  default:
-    return "unknown";
+    case CORES3_APP_POWER_STATUS_CHARGING:
+      return "charging";
+    case CORES3_APP_POWER_STATUS_USB_POWER:
+      return "usb-power";
+    case CORES3_APP_POWER_STATUS_BATTERY:
+      return "battery";
+    case CORES3_APP_POWER_STATUS_UNKNOWN:
+    default:
+      return "unknown";
   }
 }
 
@@ -81,31 +76,18 @@ static cores3_app_power_status_t cores3_app_power_status_read(axp2101_t *pmic) {
     return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 
-  cores3_power_mgmt_power_status_t power_status =
-      CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN;
+  cores3_power_mgmt_power_status_t power_status = CORES3_POWER_MGMT_POWER_STATUS_UNKNOWN;
   int32_t err = cores3_power_mgmt_power_status_get(pmic, &power_status);
   if (err != AXP2101_ERR_NONE) {
     ESP_LOGW(CORES3_APP_LOG_TAG,
              "Failed to read board power status for status bar: %s (%ld)",
-             cores3_power_mgmt_err_to_name(err), (long)err);
+             cores3_power_mgmt_err_to_name(err),
+             (long)err);
     return CORES3_APP_POWER_STATUS_UNKNOWN;
   }
 
   return cores3_app_power_status_from_power_mgmt(power_status);
 }
-
-static struct {
-  cores3_app_power_mgmt_init_hook_t init_callback;
-  cores3_app_power_mgmt_periodic_hook_t periodic_callback;
-  cores3_app_power_status_hook_t status_callback;
-  void *user_ctx;
-} power_hooks = {0};
-
-static struct {
-  cores3_app_reboot_hook_t callback;
-  void *user_ctx;
-} reboot_hooks = {0};
-
 typedef struct {
   aw9523b_t io_expander;
   axp2101_t pmic;
@@ -127,47 +109,12 @@ typedef struct {
   bool display_power_save_enabled;
   cores3_app_display_power_save_override_t display_power_save_override;
   TickType_t last_user_activity_tick;
+  cores3_app_hooks_t hooks;
 } app_t;
 
+static cores3_app_hooks_t hooks = {0};
+
 static app_t app = {0};
-
-void cores3_app_configure_power_hooks(const cores3_app_power_hooks_t *hooks) {
-  if (hooks == NULL) {
-    return;
-  }
-
-  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_INIT_CALLBACK) != 0U) {
-    power_hooks.init_callback = hooks->init_callback;
-  }
-
-  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_PERIODIC_CALLBACK) !=
-      0U) {
-    power_hooks.periodic_callback = hooks->periodic_callback;
-  }
-
-  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_STATUS_CALLBACK) !=
-      0U) {
-    power_hooks.status_callback = hooks->status_callback;
-  }
-
-  if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_USER_CTX) != 0U) {
-    power_hooks.user_ctx = hooks->user_ctx;
-  }
-}
-
-void cores3_app_configure_reboot_hooks(const cores3_app_reboot_hooks_t *hooks) {
-  if (hooks == NULL) {
-    return;
-  }
-
-  if (hooks->callback != NULL) {
-    reboot_hooks.callback = hooks->callback;
-  }
-
-  if (hooks->user_ctx != NULL) {
-    reboot_hooks.user_ctx = hooks->user_ctx;
-  }
-}
 
 cores3_app_power_status_t cores3_app_power_status_get(void) {
   if (!app.power_status_valid) {
@@ -180,13 +127,13 @@ cores3_app_power_status_t cores3_app_power_status_get(void) {
 int32_t cores3_app_display_power_save_override_set(
     cores3_app_display_power_save_override_t override_mode) {
   switch (override_mode) {
-  case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_AUTO:
-  case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED:
-  case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED:
-    break;
+    case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_AUTO:
+    case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED:
+    case CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED:
+      break;
 
-  default:
-    return AXP2101_ERR_INVALID_ARG;
+    default:
+      return AXP2101_ERR_INVALID_ARG;
   }
 
   app.display_power_save_override = override_mode;
@@ -199,8 +146,7 @@ int32_t cores3_app_display_power_save_override_set(
   return AXP2101_ERR_NONE;
 }
 
-cores3_app_display_power_save_override_t
-cores3_app_display_power_save_override_get(void) {
+cores3_app_display_power_save_override_t cores3_app_display_power_save_override_get(void) {
   return app.display_power_save_override;
 }
 
@@ -265,18 +211,11 @@ static const uint16_t CORES3_APP_BACKLIGHT_MAX_MV = 3300;
 
 static uint8_t cores3_app_brightness_gamma_correct(uint8_t brightness_percent) {
   static const uint8_t gamma_table[101] = {
-      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-      0,  0,  0,  0,  0,  0,  0,  0,  0,  1,
-      1,  1,  1,  1,  1,  1,  1,  1,  2,  2,
-      2,  2,  2,  2,  3,  3,  3,  3,  3,  4,
-      4,  4,  4,  5,  5,  5,  5,  6,  6,  6,
-      7,  7,  7,  8,  8,  8,  9,  9,  10, 10,
-      10, 11, 11, 12, 12, 13, 13, 14, 14, 15,
-      15, 16, 16, 17, 17, 18, 18, 19, 20, 21,
-      21, 22, 23, 24, 24, 25, 26, 27, 28, 28,
-      28, 28, 28, 28, 28, 28, 28, 28, 28, 28,
-      28
-  };
+      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  1,  1,
+      1,  1,  1,  1,  1,  1,  1,  2,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  4,  4,  4,
+      4,  5,  5,  5,  5,  6,  6,  6,  7,  7,  7,  8,  8,  8,  9,  9,  10, 10, 10, 11, 11,
+      12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 21, 22, 23, 24,
+      24, 25, 26, 27, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28};
   return gamma_table[brightness_percent];
 }
 
@@ -294,8 +233,10 @@ int32_t cores3_app_display_brightness_set(uint8_t brightness_percent) {
 
   int32_t err = cores3_app_lcd_backlight_voltage_set(voltage_mv);
   if (err == AXP2101_ERR_NONE) {
-    ESP_LOGI(CORES3_APP_LOG_TAG, "Display brightness set to %u%% (%u mV)",
-             brightness_percent, voltage_mv);
+    ESP_LOGI(CORES3_APP_LOG_TAG,
+             "Display brightness set to %u%% (%u mV)",
+             brightness_percent,
+             voltage_mv);
   }
   return err;
 }
@@ -316,11 +257,8 @@ int32_t cores3_app_display_brightness_get(uint8_t *brightness_percent) {
   } else if (voltage_mv >= CORES3_APP_BACKLIGHT_MAX_MV) {
     *brightness_percent = 100;
   } else {
-    uint32_t range_mv =
-        CORES3_APP_BACKLIGHT_MAX_MV - CORES3_APP_BACKLIGHT_MIN_MV;
-    *brightness_percent =
-        (uint8_t)(((voltage_mv - CORES3_APP_BACKLIGHT_MIN_MV) * 100) /
-                  range_mv);
+    uint32_t range_mv = CORES3_APP_BACKLIGHT_MAX_MV - CORES3_APP_BACKLIGHT_MIN_MV;
+    *brightness_percent = (uint8_t)(((voltage_mv - CORES3_APP_BACKLIGHT_MIN_MV) * 100) / range_mv);
   }
 
   return AXP2101_ERR_NONE;
@@ -400,7 +338,8 @@ static void cores3_app_cleanup(void) {
   }
 }
 
-static bool cores3_app_touch_coordinates_map(uint16_t raw_x, uint16_t raw_y,
+static bool cores3_app_touch_coordinates_map(uint16_t raw_x,
+                                             uint16_t raw_y,
                                              int16_t *mapped_x,
                                              int16_t *mapped_y) {
   if (mapped_x == NULL || mapped_y == NULL) {
@@ -429,14 +368,12 @@ static int32_t cores3_app_init_board_devices(void) {
 
   err = cores3_io_extender_init(app.board.i2c_aw9523b, &app.io_expander);
   if (err != 0) {
-    printf("Failed to initialize AW9523B: %s\n",
-           cores3_io_extender_err_to_name(err));
+    printf("Failed to initialize AW9523B: %s\n", cores3_io_extender_err_to_name(err));
     return err;
   }
   app.io_expander_initialized = true;
 
-  err = cores3_power_mgmt_init(app.board.i2c_axp2101, &app.io_expander,
-                               &app.pmic);
+  err = cores3_power_mgmt_init(app.board.i2c_axp2101, &app.io_expander, &app.pmic);
   if (err != 0) {
     return err;
   }
@@ -450,29 +387,31 @@ static int32_t cores3_app_init_board_devices(void) {
   err = cores3_io_extender_host_interrupt_init(app.task_handle);
   if (err != 0) {
     printf("Failed to setup I/O extender interrupt: %s (%ld)\n",
-           cores3_io_extender_err_to_name(err), (long)err);
+           cores3_io_extender_err_to_name(err),
+           (long)err);
     return err;
   }
 
-  err = cores3_touch_init(app.board.i2c_ft6336, &app.io_expander,
-                          &app.touch_screen);
+  err = cores3_touch_init(app.board.i2c_ft6336, &app.io_expander, &app.touch_screen);
   if (err != FT6X36_ERR_NONE) {
     printf("Failed to configure the touch screen: %s (%ld)\n",
-           cores3_touch_err_to_name(err), (long)err);
+           cores3_touch_err_to_name(err),
+           (long)err);
     return err;
   }
   app.touch_initialized = true;
 
-  err = cores3_display_init(&app.display, app.board.display_spi_device,
-                            &app.io_expander);
+  err = cores3_display_init(&app.display, app.board.display_spi_device, &app.io_expander);
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to initialize CoreS3 display: %ld\n", (long)err);
     return err;
   }
   app.display_initialized = true;
 
-  err = display_surface_init(&app.surface, cores3_display_panel(&app.display),
-                             cores3_display_width(), cores3_display_height(),
+  err = display_surface_init(&app.surface,
+                             cores3_display_panel(&app.display),
+                             cores3_display_width(),
+                             cores3_display_height(),
                              cores3_display_max_transfer_bytes());
   if (err != ILI9342_ERR_NONE) {
     printf("Failed to initialize display surface: %ld\n", (long)err);
@@ -490,10 +429,8 @@ static bool cores3_app_wifi_connected(void) {
 }
 
 static int32_t cores3_app_refresh_status_bar(void) {
-  cores3_app_power_status_t power_status =
-      cores3_app_power_status_read(&app.pmic);
-  bool power_status_changed =
-      !app.power_status_valid || app.power_status != power_status;
+  cores3_app_power_status_t power_status = cores3_app_power_status_read(&app.pmic);
+  bool power_status_changed = !app.power_status_valid || app.power_status != power_status;
   app.power_status = power_status;
   app.power_status_valid = true;
 
@@ -506,38 +443,38 @@ static int32_t cores3_app_refresh_status_bar(void) {
     battery_percent_valid = true;
   }
 
-  if (power_status_changed && power_hooks.status_callback != NULL) {
-    power_hooks.status_callback(power_status, power_hooks.user_ctx);
+  if (power_status_changed && app.hooks.power_status_hook != NULL) {
+    app.hooks.power_status_hook(power_status, app.hooks.user_ctx);
   }
 
   char free_heap_str[64] = {0};
-  snprintf(free_heap_str, sizeof(free_heap_str), "Free Heap %lu B",
+  snprintf(free_heap_str,
+           sizeof(free_heap_str),
+           "Free Heap %lu B",
            (unsigned long)esp_get_free_heap_size());
 
-  return cores3_gui_app_set_status_bar(
-      &app.gui, free_heap_str, cores3_app_wifi_connected(),
-      cores3_app_power_status_to_gui(power_status), battery_percent,
-      battery_percent_valid);
+  return cores3_gui_app_set_status_bar(&app.gui,
+                                       free_heap_str,
+                                       cores3_app_wifi_connected(),
+                                       cores3_app_power_status_to_gui(power_status),
+                                       battery_percent,
+                                       battery_percent_valid);
 }
 
-static bool cores3_app_tick_deadline_reached(TickType_t now,
-                                             TickType_t deadline) {
+static bool cores3_app_tick_deadline_reached(TickType_t now, TickType_t deadline) {
   return (int32_t)(now - deadline) >= 0;
 }
 
 static bool cores3_app_display_power_save_allowed(void) {
-  return app.power_status_valid &&
-         app.power_status == CORES3_APP_POWER_STATUS_BATTERY;
+  return app.power_status_valid && app.power_status == CORES3_APP_POWER_STATUS_BATTERY;
 }
 
 static bool cores3_app_display_power_save_forced_enabled(void) {
-  return app.display_power_save_override ==
-         CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED;
+  return app.display_power_save_override == CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_ENABLED;
 }
 
 static bool cores3_app_display_power_save_forced_disabled(void) {
-  return app.display_power_save_override ==
-         CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED;
+  return app.display_power_save_override == CORES3_APP_DISPLAY_POWER_SAVE_OVERRIDE_FORCE_DISABLED;
 }
 
 static int32_t cores3_app_display_power_save_set(bool enabled) {
@@ -575,23 +512,20 @@ static int32_t cores3_app_display_power_save_set(bool enabled) {
   }
 
   app.display_power_save_enabled = enabled;
-  ESP_LOGI(CORES3_APP_LOG_TAG, "Display power-save %s",
-           enabled ? "enabled" : "disabled");
+  ESP_LOGI(CORES3_APP_LOG_TAG, "Display power-save %s", enabled ? "enabled" : "disabled");
   return ILI9342_ERR_NONE;
 }
 
 static void cores3_app_note_user_activity(void) {
   app.last_user_activity_tick = xTaskGetTickCount();
 
-  if (!app.display_power_save_enabled ||
-      cores3_app_display_power_save_forced_enabled()) {
+  if (!app.display_power_save_enabled || cores3_app_display_power_save_forced_enabled()) {
     return;
   }
 
   int32_t err = cores3_app_display_power_save_set(false);
   if (err != ILI9342_ERR_NONE) {
-    ESP_LOGW(CORES3_APP_LOG_TAG, "Failed to restore display after touch: %ld",
-             (long)err);
+    ESP_LOGW(CORES3_APP_LOG_TAG, "Failed to restore display after touch: %ld", (long)err);
   }
 }
 
@@ -618,9 +552,8 @@ static void cores3_app_run_display_idle_policy(void) {
     if (!app.display_power_save_enabled) {
       int32_t err = cores3_app_display_power_save_set(true);
       if (err != ILI9342_ERR_NONE) {
-        ESP_LOGW(CORES3_APP_LOG_TAG,
-                 "Failed to enable forced display power-save mode: %ld",
-                 (long)err);
+        ESP_LOGW(
+            CORES3_APP_LOG_TAG, "Failed to enable forced display power-save mode: %ld", (long)err);
       }
     }
     return;
@@ -631,10 +564,9 @@ static void cores3_app_run_display_idle_policy(void) {
     if (app.display_power_save_enabled) {
       int32_t err = cores3_app_display_power_save_set(false);
       if (err != ILI9342_ERR_NONE) {
-        ESP_LOGW(
-            CORES3_APP_LOG_TAG,
-            "Failed to disable display power-save outside battery mode: %ld",
-            (long)err);
+        ESP_LOGW(CORES3_APP_LOG_TAG,
+                 "Failed to disable display power-save outside battery mode: %ld",
+                 (long)err);
       }
     }
     return;
@@ -644,22 +576,19 @@ static void cores3_app_run_display_idle_policy(void) {
     return;
   }
 
-  TickType_t dim_deadline =
-      app.last_user_activity_tick + CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS;
+  TickType_t dim_deadline = app.last_user_activity_tick + CORES3_APP_DISPLAY_DIM_TIMEOUT_TICKS;
   if (!cores3_app_tick_deadline_reached(now, dim_deadline)) {
     return;
   }
 
   int32_t err = cores3_app_display_power_save_set(true);
   if (err != ILI9342_ERR_NONE) {
-    ESP_LOGW(CORES3_APP_LOG_TAG, "Failed to enter display power-save mode: %ld",
-             (long)err);
+    ESP_LOGW(CORES3_APP_LOG_TAG, "Failed to enter display power-save mode: %ld", (long)err);
   }
 }
 
-static bool
-cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refresh_tick) {
-  if (power_hooks.periodic_callback == NULL || next_refresh_tick == NULL) {
+static bool cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refresh_tick) {
+  if (app.hooks.tick_1s_hook == NULL || next_refresh_tick == NULL) {
     return false;
   }
 
@@ -668,7 +597,7 @@ cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refresh_tick) {
     return false;
   }
 
-  power_hooks.periodic_callback(&app.pmic, power_hooks.user_ctx);
+  app.hooks.tick_1s_hook(&app.pmic, app.hooks.user_ctx);
 
   do {
     *next_refresh_tick += CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS;
@@ -677,19 +606,18 @@ cores3_app_run_periodic_power_mgmt_hook_if_due(TickType_t *next_refresh_tick) {
   return true;
 }
 
-static void cores3_app_handle_gui_event(cores3_gui_app_event_t event,
-                                        void *user_ctx) {
+static void cores3_app_handle_gui_event(cores3_gui_app_event_t event, void *user_ctx) {
   (void)user_ctx;
 
   switch (event) {
-  case CORES3_GUI_APP_EVENT_REBOOT_BUTTON_PRESSED:
-    if (reboot_hooks.callback != NULL) {
-      reboot_hooks.callback(reboot_hooks.user_ctx);
-    }
-    esp_restart();
+    case CORES3_GUI_APP_EVENT_REBOOT_BUTTON_PRESSED:
+      if (app.hooks.reboot_hook != NULL) {
+        app.hooks.reboot_hook(app.hooks.user_ctx);
+      }
+      esp_restart();
 
-  default:
-    break;
+    default:
+      break;
   }
 }
 
@@ -708,8 +636,10 @@ static void cores3_app_process_touch(void) {
   ft6x36_touch_data_t out_touch;
   err = ft6x36_touch_data_get(&app.touch_screen, &out_touch);
   if (err != FT6X36_ERR_NONE) {
-    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to read the touch data: %s (%ld)",
-             ft6x36_err_to_name(err), (long)err);
+    ESP_LOGE(CORES3_APP_LOG_TAG,
+             "Failed to read the touch data: %s (%ld)",
+             ft6x36_err_to_name(err),
+             (long)err);
     return;
   }
 
@@ -720,29 +650,32 @@ static void cores3_app_process_touch(void) {
     }
 
     ESP_LOGI(CORES3_APP_LOG_TAG,
-             "Touch %u coord (%u, %u), area: %u, weight: %u, event: %u", count,
-             (unsigned)point->x, (unsigned)point->y, point->area, point->weight,
+             "Touch %u coord (%u, %u), area: %u, weight: %u, event: %u",
+             count,
+             (unsigned)point->x,
+             (unsigned)point->y,
+             point->area,
+             point->weight,
              (uint8_t)point->event);
 
     int16_t touch_x = 0;
     int16_t touch_y = 0;
-    if (!cores3_app_touch_coordinates_map(point->x, point->y, &touch_x,
-                                          &touch_y)) {
+    if (!cores3_app_touch_coordinates_map(point->x, point->y, &touch_x, &touch_y)) {
       ESP_LOGW(CORES3_APP_LOG_TAG,
                "Discarding out-of-bounds touch sample (%u, %u)",
-               (unsigned)point->x, (unsigned)point->y);
+               (unsigned)point->x,
+               (unsigned)point->y);
       continue;
     }
 
     switch (point->event) {
-    case FT6X36_TOUCH_EVENT_PRESS_DOWN:
-      cores3_app_note_user_activity();
-      (void)cores3_gui_app_handle_touch(&app.gui, touch_x, touch_y,
-                                        point->event);
-      break;
+      case FT6X36_TOUCH_EVENT_PRESS_DOWN:
+        cores3_app_note_user_activity();
+        (void)cores3_gui_app_handle_touch(&app.gui, touch_x, touch_y, point->event);
+        break;
 
-    default:
-      break;
+      default:
+        break;
     }
   }
 }
@@ -757,8 +690,7 @@ void cores3_app_main(void) {
 
   int32_t err = cores3_app_init_board_devices();
   if (err != 0) {
-    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to initialize board devices: %ld",
-             (long)err);
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to initialize board devices: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }
@@ -772,23 +704,19 @@ void cores3_app_main(void) {
   app.gui_initialized = true;
   app.last_user_activity_tick = xTaskGetTickCount();
 
-  cores3_gui_app_set_event_callback(&app.gui, cores3_app_handle_gui_event,
-                                    NULL);
+  cores3_gui_app_set_event_callback(&app.gui, cores3_app_handle_gui_event, NULL);
 
-  err = cores3_gui_app_set_main_text_content(
-      &app.gui, CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT);
+  err = cores3_gui_app_set_main_text_content(&app.gui, CORES3_APP_DEFAULT_MAIN_TEXT_CONTENT);
   if (err != 0) {
-    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to set main text content: %ld",
-             (long)err);
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to set main text content: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }
 
-  if (power_hooks.init_callback != NULL) {
-    err = power_hooks.init_callback(&app.pmic, power_hooks.user_ctx);
+  if (app.hooks.init_hook != NULL) {
+    err = app.hooks.init_hook(&app.pmic, app.hooks.user_ctx);
     if (err != 0) {
-      ESP_LOGE(CORES3_APP_LOG_TAG,
-               "Failed to run power management init hook: %ld", (long)err);
+      ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to run power management init hook: %ld", (long)err);
       cores3_app_cleanup();
       return;
     }
@@ -796,34 +724,30 @@ void cores3_app_main(void) {
 
   err = cores3_app_refresh_status_bar();
   if (err != 0) {
-    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to refresh status bar: %ld",
-             (long)err);
+    ESP_LOGE(CORES3_APP_LOG_TAG, "Failed to refresh status bar: %ld", (long)err);
     cores3_app_cleanup();
     return;
   }
 
   TickType_t next_power_mgmt_refresh_tick = 0U;
-  if (power_hooks.periodic_callback != NULL) {
-    next_power_mgmt_refresh_tick =
-        xTaskGetTickCount() + CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS;
+  if (app.hooks.tick_1s_hook != NULL) {
+    next_power_mgmt_refresh_tick = xTaskGetTickCount() + CORES3_APP_STATUS_REFRESH_INTERVAL_TICKS;
   }
 
   while (1) {
     TickType_t wait_ticks = portMAX_DELAY;
-    if (power_hooks.periodic_callback != NULL) {
+    if (app.hooks.tick_1s_hook != NULL) {
       TickType_t now = xTaskGetTickCount();
-      wait_ticks =
-          cores3_app_tick_deadline_reached(now, next_power_mgmt_refresh_tick)
-              ? 0U
-              : (next_power_mgmt_refresh_tick - now);
+      wait_ticks = cores3_app_tick_deadline_reached(now, next_power_mgmt_refresh_tick)
+                       ? 0U
+                       : (next_power_mgmt_refresh_tick - now);
     }
 
     uint32_t pending_notifications = ulTaskNotifyTake(pdTRUE, wait_ticks);
     while (pending_notifications > 0U) {
       (void)cores3_app_refresh_status_bar();
       cores3_app_process_touch();
-      if (cores3_app_run_periodic_power_mgmt_hook_if_due(
-              &next_power_mgmt_refresh_tick)) {
+      if (cores3_app_run_periodic_power_mgmt_hook_if_due(&next_power_mgmt_refresh_tick)) {
         (void)cores3_app_refresh_status_bar();
       }
       cores3_app_run_display_idle_policy();
@@ -833,8 +757,7 @@ void cores3_app_main(void) {
       }
     }
 
-    if (cores3_app_run_periodic_power_mgmt_hook_if_due(
-            &next_power_mgmt_refresh_tick)) {
+    if (cores3_app_run_periodic_power_mgmt_hook_if_due(&next_power_mgmt_refresh_tick)) {
       (void)cores3_app_refresh_status_bar();
     }
 
@@ -847,4 +770,12 @@ void cores3_app_task(void *task_context) {
 
   cores3_app_main();
   vTaskDelete(NULL);
+}
+
+void cores3_app_hooks_init() {
+	memset(&hooks, 0, sizeof(cores3_app_hooks_t));
+}
+
+cores3_app_hooks_t *cores3_app_hooks_get(void) {
+  return &hooks;
 }

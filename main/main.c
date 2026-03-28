@@ -120,17 +120,12 @@ static void custom_cores3_app_refresh(axp2101_t *pmic, void *user_ctx) {
 }
 
 void app_main(void) {
-  // Register custom PMIC behavior before the shared CoreS3 app task starts.
-  cores3_app_configure_power_hooks(&(cores3_app_power_hooks_t){
-      .update_mask = CORES3_APP_POWER_HOOK_UPDATE_INIT_CALLBACK |
-                     CORES3_APP_POWER_HOOK_UPDATE_PERIODIC_CALLBACK |
-                     CORES3_APP_POWER_HOOK_UPDATE_STATUS_CALLBACK |
-                     CORES3_APP_POWER_HOOK_UPDATE_USER_CTX,
-      .init_callback = custom_cores3_app_init,
-      .periodic_callback = custom_cores3_app_refresh,
-      .status_callback = custom_cores3_app_power_status_changed,
-      .user_ctx = &custom_cores3_app,
-  });
+  cores3_app_hooks_init();
+  cores3_app_hooks_t *hooks = cores3_app_hooks_get();
+  hooks->init_hook = custom_cores3_app_init;
+  hooks->tick_1s_hook = custom_cores3_app_refresh;
+  hooks->power_status_hook = custom_cores3_app_power_status_changed;
+  hooks->user_ctx = &custom_cores3_app;
 
   BaseType_t ret = xTaskCreate(cores3_app_task,
                                "cores3_app",
