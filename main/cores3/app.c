@@ -101,6 +101,11 @@ static struct {
   void *user_ctx;
 } power_hooks = {0};
 
+static struct {
+  cores3_app_reboot_hook_t callback;
+  void *user_ctx;
+} reboot_hooks = {0};
+
 typedef struct {
   aw9523b_t io_expander;
   axp2101_t pmic;
@@ -147,6 +152,20 @@ void cores3_app_configure_power_hooks(const cores3_app_power_hooks_t *hooks) {
 
   if ((hooks->update_mask & CORES3_APP_POWER_HOOK_UPDATE_USER_CTX) != 0U) {
     power_hooks.user_ctx = hooks->user_ctx;
+  }
+}
+
+void cores3_app_configure_reboot_hooks(const cores3_app_reboot_hooks_t *hooks) {
+  if (hooks == NULL) {
+    return;
+  }
+
+  if (hooks->callback != NULL) {
+    reboot_hooks.callback = hooks->callback;
+  }
+
+  if (hooks->user_ctx != NULL) {
+    reboot_hooks.user_ctx = hooks->user_ctx;
   }
 }
 
@@ -305,6 +324,41 @@ int32_t cores3_app_display_brightness_get(uint8_t *brightness_percent) {
   }
 
   return AXP2101_ERR_NONE;
+}
+
+int32_t cores3_app_battery_percentage_get(uint8_t *out_percent) {
+  if (out_percent == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  if (!app.board_initialized) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  axp2101_fuel_gauge_t fuel_gauge = {0};
+  int32_t err = axp2101_fuel_gauge_get(&app.pmic, &fuel_gauge);
+  if (err != AXP2101_ERR_NONE) {
+    return err;
+  }
+
+  if (!fuel_gauge.battery_percent_valid) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  *out_percent = fuel_gauge.battery_percent;
+  return AXP2101_ERR_NONE;
+}
+
+int32_t cores3_app_battery_voltage_get(uint16_t *out_mv) {
+  if (out_mv == NULL) {
+    return AXP2101_ERR_INVALID_ARG;
+  }
+
+  if (!app.board_initialized) {
+    return AXP2101_ERR_INVALID_STATE;
+  }
+
+  return axp2101_adc_vbat_read(&app.pmic, out_mv);
 }
 
 static void cores3_app_cleanup(void) {
@@ -629,6 +683,9 @@ static void cores3_app_handle_gui_event(cores3_gui_app_event_t event,
 
   switch (event) {
   case CORES3_GUI_APP_EVENT_REBOOT_BUTTON_PRESSED:
+    if (reboot_hooks.callback != NULL) {
+      reboot_hooks.callback(reboot_hooks.user_ctx);
+    }
     esp_restart();
 
   default:
