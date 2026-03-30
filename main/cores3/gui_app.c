@@ -54,8 +54,8 @@ static int16_t cores3_gui_text_center_baseline_y(const bmf_font_view_t *font,
     return 0;
   }
 
-  int32_t box_height = (int32_t)bounding->y1 - (int32_t)bounding->y0 + 1;
-  int32_t line_height = font->line_height > 0U ? (int32_t)font->line_height : 1;
+  int32_t box_height = bounding->y1 - bounding->y0 + 1;
+  int32_t line_height = font->line_height > 0U ? font->line_height : 1;
   int32_t line_y0 = bounding->y0;
   if (box_height > line_height) {
     line_y0 += (box_height - line_height) / 2;
@@ -80,7 +80,7 @@ static int32_t cores3_gui_load_font(bmf_font_view_t *font, const uint8_t *font_d
 
   bmf_status_t bmf_ret = bmf_font_view_load_bytes(font, font_data, len);
   if (bmf_ret != BMF_STATUS_OK) {
-    return (int32_t)bmf_ret;
+    return bmf_ret;
   }
 
   return BMF_STATUS_OK;
