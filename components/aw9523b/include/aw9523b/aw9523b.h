@@ -28,7 +28,9 @@ extern "C" {
 /** @brief Success return code. */
 #define AW9523B_ERR_NONE 0
 /** @brief Base value for AW9523B-specific error codes. */
-#define AW9523B_ERR_BASE 0x3500
+#ifndef AW9523B_ERR_BASE
+#define AW9523B_ERR_BASE 0x70009000
+#endif
 #define AW9523B_ERR_FAIL (AW9523B_ERR_BASE + 1)          /*!< Generic failure */
 #define AW9523B_ERR_NO_MEM (AW9523B_ERR_BASE + 2)        /*!< Out of memory */
 #define AW9523B_ERR_INVALID_ARG (AW9523B_ERR_BASE + 3)   /*!< Invalid argument */

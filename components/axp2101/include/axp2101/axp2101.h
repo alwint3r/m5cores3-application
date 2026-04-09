@@ -25,7 +25,9 @@ extern "C" {
 /** @brief Success return code. */
 #define AXP2101_ERR_NONE 0
 /** @brief Base value for AXP2101-specific error codes. */
-#define AXP2101_ERR_BASE 0x3400
+#ifndef AXP2101_ERR_BASE
+#define AXP2101_ERR_BASE 0x70008000
+#endif
 #define AXP2101_ERR_FAIL (AXP2101_ERR_BASE + 1)          /*!< Generic failure */
 #define AXP2101_ERR_NO_MEM (AXP2101_ERR_BASE + 2)        /*!< Out of memory */
 #define AXP2101_ERR_INVALID_ARG (AXP2101_ERR_BASE + 3)   /*!< Invalid argument */

@@ -21,7 +21,9 @@ extern "C" {
 /** @brief Success return code. */
 #define II2C_ERR_NONE 0
 /** @brief Base value for II2C-specific error codes. */
-#define II2C_ERR_BASE 0x3000
+#ifndef II2C_ERR_BASE
+#define II2C_ERR_BASE 0x70003000
+#endif
 #define II2C_ERR_FAIL (II2C_ERR_BASE + 1)          /*!< Generic failure */
 #define II2C_ERR_NO_MEM (II2C_ERR_BASE + 2)        /*!< Out of memory */
 #define II2C_ERR_INVALID_ARG (II2C_ERR_BASE + 3)   /*!< Invalid argument */

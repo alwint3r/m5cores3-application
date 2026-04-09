@@ -29,7 +29,9 @@ extern "C" {
 /** @brief Success return code. */
 #define FT6X36_ERR_NONE 0
 /** @brief Base value for FT6X36-specific error codes. */
-#define FT6X36_ERR_BASE 0x3300
+#ifndef FT6X36_ERR_BASE
+#define FT6X36_ERR_BASE 0x70006000
+#endif
 #define FT6X36_ERR_FAIL (FT6X36_ERR_BASE + 1)          /*!< Generic failure. */
 #define FT6X36_ERR_NO_MEM (FT6X36_ERR_BASE + 2)        /*!< Out-of-memory failure. */
 #define FT6X36_ERR_INVALID_ARG (FT6X36_ERR_BASE + 3)   /*!< Invalid function argument. */
